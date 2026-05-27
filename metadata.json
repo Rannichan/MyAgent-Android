@@ -1,0 +1,6 @@
+{
+  "name": "Agent Hub",
+  "description": "An interactive agent-oriented chatting client supporting OpenAI compatible LLMs, featuring NPC custom personas and advanced configuration Agents (including Agent.md, custom tool simulation, system documents, metrics, and theme styles).",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
