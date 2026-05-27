@@ -98,6 +98,45 @@ class AppRepository(context: Context) {
         messageDao.deleteMessageById(id)
     }
 
+    suspend fun updateMessage(message: ChatMessage) {
+        val session = sessionDao.getSessionById(message.sessionId)
+        if (session != null) {
+            val shortText = if (message.content.length > 60) {
+                message.content.take(60) + "..."
+            } else {
+                message.content
+            }
+            sessionDao.updateSession(
+                session.copy(
+                    lastMessage = shortText,
+                    updatedAt = message.timestamp
+                )
+            )
+        }
+        messageDao.updateMessage(message)
+    }
+
+    suspend fun deleteMessagesAfterId(sessionId: Long, messageId: Long) {
+        messageDao.deleteMessagesAfterId(sessionId, messageId)
+        // Also update the session's last message
+        val remaining = messageDao.getMessagesForSession(sessionId)
+        val session = sessionDao.getSessionById(sessionId)
+        if (session != null) {
+            val lastMsg = remaining.lastOrNull()
+            val shortText = if (lastMsg != null) {
+                if (lastMsg.content.length > 60) lastMsg.content.take(60) + "..." else lastMsg.content
+            } else {
+                "No messages yet"
+            }
+            sessionDao.updateSession(
+                session.copy(
+                    lastMessage = shortText,
+                    updatedAt = lastMsg?.timestamp ?: System.currentTimeMillis()
+                )
+            )
+        }
+    }
+
     // Models & LLM Services
     suspend fun fetchModelsFromEndpoint(baseUrl: String, apiKey: String): List<String> {
         return openAiService.testConnectionAndGetModels(baseUrl, apiKey)

@@ -32,6 +32,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.text.*
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
@@ -57,49 +60,60 @@ val AvatarColors = listOf(
     Color(0xFFC2185B), // 5: Rose
 )
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
 @Composable
 fun MainAppContainer(viewModel: MainViewModel) {
     val settings by viewModel.settingsFlow.collectAsStateWithLifecycle(initialValue = AppSettings())
     val activeSettings = settings ?: AppSettings()
 
     var currentTab by remember { mutableStateOf("chat") }
+    val isNavigationBarVisible by viewModel.isNavigationBarVisible.collectAsStateWithLifecycle()
 
     AgentHubTheme(
         themeMode = activeSettings.themeMode,
         themeColor = activeSettings.themeColor
     ) {
+        val isKeyboardVisible = WindowInsets.isImeVisible
         Scaffold(
             bottomBar = {
-                NavigationBar(
-                    windowInsets = WindowInsets.navigationBars,
-                    tonalElevation = 8.dp
+                AnimatedVisibility(
+                    visible = (isNavigationBarVisible && !isKeyboardVisible) || (currentTab != "chat" && !isKeyboardVisible),
+                    enter = slideInVertically(animationSpec = spring()) { it } + fadeIn(),
+                    exit = slideOutVertically(animationSpec = spring()) { it } + fadeOut()
                 ) {
-                    NavigationBarItem(
-                        selected = currentTab == "chat",
-                        onClick = { currentTab = "chat" },
-                        icon = { Icon(Icons.Default.Chat, contentDescription = "对话") },
-                        label = { Text("对话") }
-                    )
-                    NavigationBarItem(
-                        selected = currentTab == "personas",
-                        onClick = { currentTab = "personas" },
-                        icon = { Icon(Icons.Default.RecentActors, contentDescription = "人设配置") },
-                        label = { Text("人设/Agent") }
-                    )
-                    NavigationBarItem(
-                        selected = currentTab == "settings",
-                        onClick = { currentTab = "settings" },
-                        icon = { Icon(Icons.Default.Settings, contentDescription = "设置机能") },
-                        label = { Text("设置/分析") }
-                    )
+                    NavigationBar(
+                        windowInsets = WindowInsets.navigationBars,
+                        tonalElevation = 8.dp
+                    ) {
+                        NavigationBarItem(
+                            selected = currentTab == "chat",
+                            onClick = { currentTab = "chat" },
+                            icon = { Icon(Icons.Default.Chat, contentDescription = "对话") },
+                            label = { Text("对话") }
+                        )
+                        NavigationBarItem(
+                            selected = currentTab == "personas",
+                            onClick = { currentTab = "personas" },
+                            icon = { Icon(Icons.Default.RecentActors, contentDescription = "人设配置") },
+                            label = { Text("人设/Agent") }
+                        )
+                        NavigationBarItem(
+                            selected = currentTab == "settings",
+                            onClick = { currentTab = "settings" },
+                            icon = { Icon(Icons.Default.Settings, contentDescription = "设置机能") },
+                            label = { Text("设置/分析") }
+                        )
+                    }
                 }
             }
         ) { innerPadding ->
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(innerPadding)
+                    .padding(
+                        top = innerPadding.calculateTopPadding(),
+                        bottom = if (currentTab == "chat") 0.dp else innerPadding.calculateBottomPadding()
+                    )
             ) {
                 AnimatedContent(
                     targetState = currentTab,
@@ -109,7 +123,10 @@ fun MainAppContainer(viewModel: MainViewModel) {
                     label = "TabTransition"
                 ) { targetTab ->
                     when (targetTab) {
-                        "chat" -> ChatScreen(viewModel = viewModel)
+                        "chat" -> ChatScreen(
+                            viewModel = viewModel,
+                            bottomPadding = innerPadding.calculateBottomPadding()
+                        )
                         "personas" -> PersonaManagementScreen(viewModel = viewModel)
                         "settings" -> SettingsScreen(viewModel = viewModel)
                     }
@@ -120,9 +137,12 @@ fun MainAppContainer(viewModel: MainViewModel) {
 }
 
 // ----------------== CHAT SCREEN ==----------------
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
 @Composable
-fun ChatScreen(viewModel: MainViewModel) {
+fun ChatScreen(
+    viewModel: MainViewModel,
+    bottomPadding: androidx.compose.ui.unit.Dp = 0.dp
+) {
     val sessions by viewModel.allSessionsFlow.collectAsStateWithLifecycle(initialValue = emptyList())
     val currentSessionId by viewModel.currentSessionId.collectAsStateWithLifecycle()
     val activeMessages by viewModel.activeMessages.collectAsStateWithLifecycle()
@@ -338,8 +358,43 @@ fun ChatScreen(viewModel: MainViewModel) {
                     val listState = rememberLazyListState()
                     val coroutineScope = rememberCoroutineScope()
 
+                    DisposableEffect(Unit) {
+                        onDispose {
+                            viewModel.setNavigationBarVisibility(true)
+                        }
+                    }
+
+                    LaunchedEffect(listState) {
+                        var previousIndex = 0
+                        var previousOffset = 0
+                        snapshotFlow { listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset }
+                            .collect { (currentIndex, currentOffset) ->
+                                if (currentIndex > previousIndex) {
+                                    viewModel.setNavigationBarVisibility(false)
+                                } else if (currentIndex < previousIndex) {
+                                    viewModel.setNavigationBarVisibility(true)
+                                } else {
+                                    val delta = currentOffset - previousOffset
+                                    if (delta > 15) {
+                                        viewModel.setNavigationBarVisibility(false)
+                                    } else if (delta < -15) {
+                                        viewModel.setNavigationBarVisibility(true)
+                                    }
+                                }
+                                previousIndex = currentIndex
+                                previousOffset = currentOffset
+                            }
+                    }
+
                     LaunchedEffect(activeMessages.size, isStreaming) {
                         if (activeMessages.isNotEmpty()) {
+                            listState.animateScrollToItem(activeMessages.lastIndex)
+                        }
+                    }
+
+                    val keyboardPadding = WindowInsets.ime.asPaddingValues().calculateBottomPadding()
+                    LaunchedEffect(keyboardPadding) {
+                        if (keyboardPadding > 0.dp && activeMessages.isNotEmpty()) {
                             listState.animateScrollToItem(activeMessages.lastIndex)
                         }
                     }
@@ -369,7 +424,10 @@ fun ChatScreen(viewModel: MainViewModel) {
                                     onSimulateToolOutput = { toolName, output ->
                                         viewModel.simulateToolResponse(toolName, output)
                                     },
-                                    onDeleteMessage = { viewModel.deleteSingleMessage(message.id) }
+                                    onDeleteMessage = { viewModel.deleteSingleMessage(message.id) },
+                                    onEditMessage = { newContent ->
+                                        viewModel.editUserMessage(message.id, newContent)
+                                    }
                                 )
                             }
                         }
@@ -462,7 +520,8 @@ fun ChatScreen(viewModel: MainViewModel) {
                     // Text Dialog Input box
                     ChatInputPanel(
                         viewModel = viewModel,
-                        isStreaming = isStreaming
+                        isStreaming = isStreaming,
+                        bottomPadding = bottomPadding
                     )
                 }
             }
@@ -809,7 +868,8 @@ fun ChatScreen(viewModel: MainViewModel) {
 @Composable
 fun ChatInputPanel(
     viewModel: MainViewModel,
-    isStreaming: Boolean
+    isStreaming: Boolean,
+    bottomPadding: androidx.compose.ui.unit.Dp = 0.dp
 ) {
     val settings by viewModel.settingsFlow.collectAsStateWithLifecycle(initialValue = AppSettings())
     val activeSettings = settings ?: AppSettings()
@@ -817,9 +877,21 @@ fun ChatInputPanel(
     var modelExpanded by remember { mutableStateOf(false) }
     val modelsList by viewModel.modelsList.collectAsStateWithLifecycle()
 
+    val keyboardPadding = WindowInsets.ime.asPaddingValues().calculateBottomPadding()
+    val isKeyboardOpen = keyboardPadding > 0.dp
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
+            .then(
+                if (isKeyboardOpen) {
+                    Modifier.imePadding()
+                } else if (bottomPadding > 0.dp) {
+                    Modifier.padding(bottom = bottomPadding)
+                } else {
+                    Modifier.navigationBarsPadding()
+                }
+            )
             .padding(12.dp)
     ) {
         // Option quick toggle strip
@@ -917,8 +989,7 @@ fun ChatInputPanel(
                 onValueChange = { inputStr = it },
                 placeholder = { Text("说点什么...") },
                 modifier = Modifier
-                    .weight(1f)
-                    .imePadding(),
+                    .weight(1f),
                 maxLines = 4,
                 shape = RoundedCornerShape(12.dp),
                 keyboardOptions = KeyboardOptions(
@@ -975,7 +1046,8 @@ fun MessageBubbleItem(
     message: ChatMessage,
     isStreamingActive: Boolean,
     onSimulateToolOutput: (String, String) -> Unit,
-    onDeleteMessage: () -> Unit
+    onDeleteMessage: () -> Unit,
+    onEditMessage: (String) -> Unit
 ) {
     val isUser = message.role == "user"
     val isSystem = message.role == "system"
@@ -985,6 +1057,9 @@ fun MessageBubbleItem(
     var isThinkingExpanded by remember(message.id) { mutableStateOf(isStreamingActive) }
     var isToolExpanded by remember(message.id) { mutableStateOf(isStreamingActive) }
     var contextMenuExpanded by remember { mutableStateOf(false) }
+
+    var isEditing by remember(message.id) { mutableStateOf(false) }
+    var editedText by remember(message.content) { mutableStateOf(message.content) }
 
     LaunchedEffect(isStreamingActive) {
         if (!isStreamingActive) {
@@ -1066,6 +1141,56 @@ fun MessageBubbleItem(
                             color = if (isUser) MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.8f) else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
                         )
                     }
+
+                    if (isEditing) {
+                        OutlinedTextField(
+                            value = editedText,
+                            onValueChange = { editedText = it },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 4.dp),
+                            textStyle = MaterialTheme.typography.bodyMedium.copy(
+                                color = if (isUser) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
+                            ),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedTextColor = if (isUser) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
+                                unfocusedTextColor = if (isUser) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
+                                focusedBorderColor = if (isUser) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.primary,
+                                unfocusedBorderColor = if (isUser) MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.5f) else MaterialTheme.colorScheme.outline
+                            )
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                            horizontalArrangement = Arrangement.End
+                        ) {
+                            TextButton(
+                                onClick = {
+                                    isEditing = false
+                                    editedText = message.content
+                                },
+                                colors = ButtonDefaults.textButtonColors(
+                                    contentColor = if (isUser) MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.8f) else MaterialTheme.colorScheme.primary
+                                )
+                            ) {
+                                Text("取消")
+                            }
+                            Spacer(modifier = Modifier.width(8.dp))
+                            ElevatedButton(
+                                onClick = {
+                                    isEditing = false
+                                    if (editedText.isNotBlank() && editedText != message.content) {
+                                        onEditMessage(editedText)
+                                    }
+                                },
+                                colors = ButtonDefaults.elevatedButtonColors(
+                                    containerColor = if (isUser) MaterialTheme.colorScheme.surface else MaterialTheme.colorScheme.primary,
+                                    contentColor = if (isUser) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onPrimary
+                                )
+                            ) {
+                                Text("保存并发送")
+                            }
+                        }
+                    } else {
 
                     // Render thinking content block if any
                     if (!message.thinkingContent.isNullOrBlank()) {
@@ -1214,6 +1339,7 @@ fun MessageBubbleItem(
                             )
                         }
                     }
+                    }
                 }
             }
         }
@@ -1223,6 +1349,15 @@ fun MessageBubbleItem(
             expanded = contextMenuExpanded,
             onDismissRequest = { contextMenuExpanded = false }
         ) {
+            if (isUser) {
+                DropdownMenuItem(
+                    text = { Text("编辑该消息") },
+                    onClick = {
+                        isEditing = true
+                        contextMenuExpanded = false
+                    }
+                )
+            }
             DropdownMenuItem(
                 text = { Text("复制文本内容") },
                 onClick = {

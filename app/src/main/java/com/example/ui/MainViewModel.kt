@@ -87,6 +87,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _isTestingConnection = MutableStateFlow(false)
     val isTestingConnection: StateFlow<Boolean> = _isTestingConnection.asStateFlow()
 
+    private val _isNavigationBarVisible = MutableStateFlow(true)
+    val isNavigationBarVisible: StateFlow<Boolean> = _isNavigationBarVisible.asStateFlow()
+
+    fun setNavigationBarVisibility(visible: Boolean) {
+        _isNavigationBarVisible.value = visible
+    }
+
     private var activeStreamingJob: Job? = null
 
     init {
@@ -320,6 +327,31 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
          viewModelScope.launch {
              repository.deleteMessage(msgId)
          }
+    }
+
+    // Edit user's historical message and re-request model response
+    fun editUserMessage(msgId: Long, newContent: String) {
+        val sessionId = _currentSessionId.value ?: return
+        if (newContent.isBlank()) return
+
+        viewModelScope.launch {
+            val messages = repository.getMessages(sessionId)
+            val msgToUpdate = messages.find { it.id == msgId }
+            if (msgToUpdate != null && msgToUpdate.role == "user") {
+                // Update message contents and timestamp
+                repository.updateMessage(
+                    msgToUpdate.copy(
+                        content = newContent,
+                        timestamp = System.currentTimeMillis()
+                    )
+                )
+                // Delete all subsequent messages in this session
+                repository.deleteMessagesAfterId(sessionId, msgId)
+
+                // Re-trigger assistant streaming response
+                executeAssistantResponse(sessionId)
+            }
+        }
     }
 
     // Chat Dialog loop execution
