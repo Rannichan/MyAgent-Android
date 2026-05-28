@@ -83,25 +83,47 @@ fun MainAppContainer(viewModel: MainViewModel) {
                 ) {
                     NavigationBar(
                         windowInsets = WindowInsets.navigationBars,
-                        tonalElevation = 8.dp
+                        tonalElevation = 8.dp,
+                        containerColor = MaterialTheme.colorScheme.surface
                     ) {
                         NavigationBarItem(
                             selected = currentTab == "chat",
                             onClick = { currentTab = "chat" },
                             icon = { Icon(Icons.Default.Chat, contentDescription = "对话") },
-                            label = { Text("对话") }
+                            label = { Text("对话") },
+                            colors = NavigationBarItemDefaults.colors(
+                                selectedIconColor = MaterialTheme.colorScheme.primary,
+                                selectedTextColor = MaterialTheme.colorScheme.primary,
+                                unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                                unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                                indicatorColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
+                            )
                         )
                         NavigationBarItem(
                             selected = currentTab == "personas",
                             onClick = { currentTab = "personas" },
                             icon = { Icon(Icons.Default.RecentActors, contentDescription = "角色工坊") },
-                            label = { Text("角色工坊") }
+                            label = { Text("角色工坊") },
+                            colors = NavigationBarItemDefaults.colors(
+                                selectedIconColor = MaterialTheme.colorScheme.primary,
+                                selectedTextColor = MaterialTheme.colorScheme.primary,
+                                unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                                unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                                indicatorColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
+                            )
                         )
                         NavigationBarItem(
                             selected = currentTab == "settings",
                             onClick = { currentTab = "settings" },
                             icon = { Icon(Icons.Default.Settings, contentDescription = "设置") },
-                            label = { Text("设置") }
+                            label = { Text("设置") },
+                            colors = NavigationBarItemDefaults.colors(
+                                selectedIconColor = MaterialTheme.colorScheme.primary,
+                                selectedTextColor = MaterialTheme.colorScheme.primary,
+                                unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                                unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                                indicatorColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
+                            )
                         )
                     }
                 }
@@ -137,7 +159,7 @@ fun MainAppContainer(viewModel: MainViewModel) {
 }
 
 // ----------------== CHAT SCREEN ==----------------
-@OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class, androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 fun ChatScreen(
     viewModel: MainViewModel,
@@ -149,21 +171,231 @@ fun ChatScreen(
     val npcs by viewModel.allNpcsFlow.collectAsStateWithLifecycle(initialValue = emptyList())
     val agents by viewModel.allAgentsFlow.collectAsStateWithLifecycle(initialValue = emptyList())
     val isStreaming by viewModel.isStreamingActive.collectAsStateWithLifecycle()
+    val latency by viewModel.latencyMs.collectAsStateWithLifecycle()
+    val tokenPrompt by viewModel.tokenCountPrompt.collectAsStateWithLifecycle()
+    val tokenCompletion by viewModel.tokenCountCompletion.collectAsStateWithLifecycle()
+    val speedTPS by viewModel.tokensPerSec.collectAsStateWithLifecycle()
 
-    var showSessionDrawer by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
+    var isSearching by remember { mutableStateOf(false) }
     var showCreateChatDialog by remember { mutableStateOf(false) }
+    var topModelExpanded by remember { mutableStateOf(false) }
+    var sessionToDeleteId by remember { mutableStateOf<Long?>(null) }
 
     val filteredSessions = sessions.filter {
         it.title.contains(searchQuery, ignoreCase = true) || it.mode.contains(searchQuery, ignoreCase = true)
     }
 
-    Box(modifier = Modifier.fillMaxSize()) {
-        Column(modifier = Modifier.fillMaxSize()) {
-            // Header Action Hub
-            val activeSession = sessions.find { it.id == currentSessionId }
-            val context = LocalContext.current
+    val context = LocalContext.current
 
+    AnimatedContent(
+        targetState = currentSessionId,
+        transitionSpec = {
+            if (targetState != null) {
+                slideInHorizontally(initialOffsetX = { it }) + fadeIn() togetherWith
+                        slideOutHorizontally(targetOffsetX = { -it }) + fadeOut()
+            } else {
+                slideInHorizontally(initialOffsetX = { -it }) + fadeIn() togetherWith
+                        slideOutHorizontally(targetOffsetX = { it }) + fadeOut()
+            }
+        },
+        label = "ChatTransition"
+    ) { targetSessionId ->
+        if (targetSessionId == null) {
+            // Combined Session Management list view
+            Scaffold(
+                topBar = {
+                    TopAppBar(
+                        title = {
+                            if (isSearching) {
+                                OutlinedTextField(
+                                    value = searchQuery,
+                                    onValueChange = { searchQuery = it },
+                                    placeholder = { Text("搜索会话...", style = MaterialTheme.typography.bodyMedium) },
+                                    singleLine = true,
+                                    colors = OutlinedTextFieldDefaults.colors(
+                                        focusedContainerColor = Color.Transparent,
+                                        unfocusedContainerColor = Color.Transparent,
+                                        focusedBorderColor = Color.Transparent,
+                                        unfocusedBorderColor = Color.Transparent
+                                    ),
+                                    textStyle = MaterialTheme.typography.bodyMedium,
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                            } else {
+                                Text(
+                                    "Agent Hub 对话",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+                        },
+                        navigationIcon = {
+                            if (isSearching) {
+                                IconButton(onClick = {
+                                    isSearching = false
+                                    searchQuery = ""
+                                }) {
+                                    Icon(Icons.Default.ArrowBack, contentDescription = "取消搜索")
+                                }
+                            } else {
+                                Box(
+                                    modifier = Modifier
+                                        .padding(12.dp)
+                                        .size(36.dp)
+                                        .clip(CircleShape)
+                                        .background(MaterialTheme.colorScheme.primaryContainer),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        Icons.Default.SmartToy,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                            }
+                        },
+                        actions = {
+                            if (!isSearching) {
+                                IconButton(onClick = { isSearching = true }) {
+                                    Icon(Icons.Default.Search, contentDescription = "搜索会话")
+                                }
+                            } else {
+                                if (searchQuery.isNotEmpty()) {
+                                    IconButton(onClick = { searchQuery = "" }) {
+                                        Icon(Icons.Default.Clear, contentDescription = "清除搜索")
+                                    }
+                                }
+                            }
+                            IconButton(onClick = { showCreateChatDialog = true }) {
+                                Icon(Icons.Default.Add, contentDescription = "开启新对话")
+                            }
+                        },
+                        colors = TopAppBarDefaults.topAppBarColors(
+                            containerColor = MaterialTheme.colorScheme.surface
+                        )
+                    )
+                }
+            ) { innerPadding ->
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(innerPadding)
+                        .background(MaterialTheme.colorScheme.background)
+                ) {
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f))
+
+                    if (filteredSessions.isEmpty()) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .weight(1f),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Icon(
+                                    Icons.Default.ChatBubbleOutline,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+                                    modifier = Modifier.size(64.dp)
+                                )
+                                Spacer(modifier = Modifier.height(12.dp))
+                                Text(
+                                    if (searchQuery.isNotEmpty()) "没有找到匹配的对话" else "暂无对话，点击右上角加号创建",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    } else {
+                        LazyColumn(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(horizontal = 16.dp, vertical = 8.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                            contentPadding = PaddingValues(bottom = bottomPadding + 16.dp)
+                        ) {
+                            items(filteredSessions, key = { it.id }) { item ->
+                                val badgeColor = when (item.mode) {
+                                    "NPC" -> Color(0xFF6200EE)
+                                    "AGENT" -> Color(0xFF00796B)
+                                    else -> Color(0xFF1E88E5)
+                                }
+
+                                Card(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .combinedClickable(
+                                            onClick = { viewModel.selectSession(item.id) },
+                                            onLongClick = { sessionToDeleteId = item.id }
+                                        ),
+                                    colors = CardDefaults.cardColors(
+                                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
+                                    ),
+                                    shape = RoundedCornerShape(12.dp),
+                                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.1f))
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(16.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(10.dp)
+                                                .clip(CircleShape)
+                                                .background(badgeColor)
+                                        )
+
+                                        Spacer(modifier = Modifier.width(12.dp))
+
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                horizontalArrangement = Arrangement.SpaceBetween,
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Text(
+                                                    item.title,
+                                                    style = MaterialTheme.typography.bodyMedium,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = MaterialTheme.colorScheme.onSurface,
+                                                    maxLines = 1
+                                                )
+                                                Surface(
+                                                    shape = RoundedCornerShape(4.dp),
+                                                    color = badgeColor.copy(alpha = 0.15f)
+                                                ) {
+                                                    Text(
+                                                        " ${item.mode} ",
+                                                        style = MaterialTheme.typography.labelSmall.copy(
+                                                            fontWeight = FontWeight.Bold,
+                                                            fontSize = 9.sp
+                                                        ),
+                                                        color = badgeColor,
+                                                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                                                    )
+                                                }
+                                            }
+                                            Spacer(modifier = Modifier.height(4.dp))
+                                            Text(
+                                                item.lastMessage.ifEmpty { "暂无消息" },
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                maxLines = 1
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            // Interactive Chat Screen View
+            val activeSession = sessions.find { it.id == targetSessionId }
             val displayTitle = if (activeSession != null) {
                 when (activeSession.mode) {
                     "NPC" -> {
@@ -180,201 +412,192 @@ fun ChatScreen(
                 "Agent Hub 对话"
             }
 
-            TopAppBar(
-                title = {
-                    Column {
-                        Text(
-                            displayTitle,
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                        val settingsItem by viewModel.settingsFlow.collectAsStateWithLifecycle(initialValue = AppSettings())
-                        val isApiConnected by viewModel.isApiConnected.collectAsStateWithLifecycle()
+            Column(modifier = Modifier.fillMaxSize()) {
+                TopAppBar(
+                    title = {
+                        Column {
+                            Text(
+                                displayTitle,
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            val settingsItem by viewModel.settingsFlow.collectAsStateWithLifecycle(initialValue = AppSettings())
+                            val isApiConnected by viewModel.isApiConnected.collectAsStateWithLifecycle()
+                            val modelsList by viewModel.modelsList.collectAsStateWithLifecycle()
+                            Box {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                    modifier = Modifier
+                                        .padding(top = 2.dp)
+                                        .clip(RoundedCornerShape(4.dp))
+                                        .clickable { topModelExpanded = true }
+                                        .padding(horizontal = 4.dp, vertical = 2.dp)
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(6.dp)
+                                            .clip(CircleShape)
+                                            .background(if (isApiConnected) Color(0xFF10B981) else Color(0xFFEF4444))
+                                    )
+                                    Text(
+                                        if (isApiConnected) (settingsItem?.defaultModel ?: "gpt-4o-mini").uppercase() else "not connected",
+                                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                                        color = if (isApiConnected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    Icon(
+                                        Icons.Default.ArrowDropDown,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(14.dp),
+                                        tint = if (isApiConnected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
+                                    )
+                                }
+                                DropdownMenu(
+                                    expanded = topModelExpanded,
+                                    onDismissRequest = { topModelExpanded = false }
+                                ) {
+                                    if (modelsList.isEmpty()) {
+                                        DropdownMenuItem(
+                                            text = { Text("没有载入模型，请到设置测试连接") },
+                                            onClick = { topModelExpanded = false }
+                                        )
+                                    } else {
+                                        modelsList.forEach { modelName ->
+                                            DropdownMenuItem(
+                                                text = { Text(modelName) },
+                                                onClick = {
+                                                    viewModel.updateSelectedModel(modelName)
+                                                    topModelExpanded = false
+                                                }
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    navigationIcon = {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(4.dp),
-                            modifier = Modifier.padding(top = 2.dp)
+                            modifier = Modifier.padding(start = 4.dp, end = 4.dp)
                         ) {
+                            IconButton(onClick = { viewModel.selectSession(null) }) {
+                                Icon(Icons.Default.ArrowBack, contentDescription = "返回列表")
+                            }
+                            Spacer(modifier = Modifier.width(4.dp))
                             Box(
                                 modifier = Modifier
-                                    .size(6.dp)
+                                    .size(36.dp)
                                     .clip(CircleShape)
-                                    .background(if (isApiConnected) Color(0xFF10B981) else Color(0xFFEF4444))
-                            )
-                            Text(
-                                if (isApiConnected) (settingsItem?.defaultModel ?: "gpt-4o-mini").uppercase() else "not connected",
-                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
-                                color = if (isApiConnected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
-                                fontWeight = FontWeight.Bold
-                            )
+                                    .background(MaterialTheme.colorScheme.primaryContainer),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    Icons.Default.SmartToy,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
                         }
-                    }
-                },
-                navigationIcon = {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.padding(start = 4.dp, end = 4.dp)
-                    ) {
-                        IconButton(onClick = { showSessionDrawer = !showSessionDrawer }) {
-                            Icon(Icons.Default.Menu, contentDescription = "会话菜单")
-                        }
+                    },
+                    actions = {
                         if (activeSession != null) {
-                            IconButton(onClick = { viewModel.selectSession(null) }) {
-                                Icon(Icons.Default.ArrowBack, contentDescription = "返回主页")
-                            }
-                        }
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Box(
-                            modifier = Modifier
-                                .size(36.dp)
-                                .clip(CircleShape)
-                                .background(MaterialTheme.colorScheme.primaryContainer),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                Icons.Default.SmartToy,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                                modifier = Modifier.size(20.dp)
-                            )
-                        }
-                    }
-                },
-                actions = {
-                    if (activeSession != null) {
-                        IconButton(onClick = {
-                            viewModel.exportChatHistoryText(activeSession.id) { log ->
-                                val sendIntent = android.content.Intent().apply {
-                                    action = android.content.Intent.ACTION_SEND
-                                    putExtra(android.content.Intent.EXTRA_TEXT, log)
-                                    type = "text/plain"
+                            IconButton(onClick = {
+                                viewModel.exportChatHistoryText(activeSession.id) { log ->
+                                    val sendIntent = android.content.Intent().apply {
+                                        action = android.content.Intent.ACTION_SEND
+                                        putExtra(android.content.Intent.EXTRA_TEXT, log)
+                                        type = "text/plain"
+                                    }
+                                    val shareIntent = android.content.Intent.createChooser(sendIntent, "分享对话历史")
+                                    context.startActivity(shareIntent)
                                 }
-                                val shareIntent = android.content.Intent.createChooser(sendIntent, "分享对话历史")
-                                context.startActivity(shareIntent)
+                            }) {
+                                Icon(Icons.Default.Share, contentDescription = "分享对话")
                             }
-                        }) {
-                            Icon(Icons.Default.Share, contentDescription = "分享对话")
-                        }
-                        IconButton(onClick = {
-                            viewModel.deleteSession(activeSession.id)
-                        }) {
-                            Icon(Icons.Default.DeleteOutline, contentDescription = "清除会话")
-                        }
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface
-                ),
-                windowInsets = TopAppBarDefaults.windowInsets
-            )
-
-            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f))
-
-            if (activeSession != null) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(MaterialTheme.colorScheme.background)
-                        .padding(horizontal = 16.dp, vertical = 8.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Surface(
-                            shape = RoundedCornerShape(4.dp),
-                            color = Color(0xFF332D41),
-                            modifier = Modifier.padding(vertical = 2.dp)
-                        ) {
-                            Text(
-                                " ${activeSession.mode} MODE ",
-                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                                color = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                            )
-                        }
-                        val detailText = when (activeSession.mode) {
-                            "NPC" -> {
-                                val npcList = npcs.filter { it.name == activeSession.title }
-                                if (npcList.isNotEmpty()) "Soul: ${npcList.first().prompt.take(24)}..." else "Custom Persona Config"
+                            IconButton(onClick = {
+                                sessionToDeleteId = activeSession.id
+                            }) {
+                                Icon(Icons.Default.DeleteOutline, contentDescription = "清除会话")
                             }
-                            "AGENT" -> "Rulebook: Action Workflows"
-                            else -> "Sandbox: Standard Prompting"
                         }
-                        Text(
-                            detailText,
-                            style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            modifier = Modifier.widthIn(max = 180.dp)
-                        )
-                    }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = MaterialTheme.colorScheme.surface
+                    ),
+                    windowInsets = TopAppBarDefaults.windowInsets
+                )
 
-                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Box(modifier = Modifier.size(6.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primary.copy(alpha = 0.4f)))
-                        Box(modifier = Modifier.size(6.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primary.copy(alpha = 0.4f)))
-                        Box(modifier = Modifier.size(6.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primary))
-                    }
-                }
                 HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f))
-            }
 
-            if (currentSessionId == null) {
-                // Intro empty screen
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .weight(1f)
-                        .padding(16.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center,
-                        modifier = Modifier.fillMaxWidth(0.85f)
+                if (activeSession != null) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(MaterialTheme.colorScheme.background)
+                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.Start,
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Icon(
-                            Icons.Default.SmartToy,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(72.dp)
-                        )
-                        Spacer(modifier = Modifier.height(16.dp))
-                        Text(
-                            "欢迎体验 Agent Hub",
-                            style = MaterialTheme.typography.titleLarge,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(
-                            "一个搭载了高级自定义人设（NPC模式）以及专属微型工作规范体系（Agent模式）的AI沙盒系统。请先创建会话或配置模型密钥以触发完美的流式互动！",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                        )
-                        Spacer(modifier = Modifier.height(24.dp))
-                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                            Button(onClick = { showCreateChatDialog = true }) {
-                                Icon(Icons.Default.Add, contentDescription = null)
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text("立即创建")
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Surface(
+                                shape = RoundedCornerShape(4.dp),
+                                color = Color(0xFF332D41),
+                                modifier = Modifier.padding(vertical = 2.dp)
+                            ) {
+                                Text(
+                                    " ${activeSession.mode} MODE ",
+                                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                    color = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                )
+                            }
+
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Text(
+                                    "⏱️ ${if (latency > 0) "${latency}ms" else "READY"}",
+                                    style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp, fontFamily = FontFamily.Monospace),
+                                    color = if (latency > 0) Color(0xFF10B981) else MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Box(modifier = Modifier.width(1.dp).height(10.dp).background(MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)))
+                                Text(
+                                    "⚡ ${String.format("%.1f", speedTPS)} t/s",
+                                    style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp, fontFamily = FontFamily.Monospace),
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                Box(modifier = Modifier.width(1.dp).height(10.dp).background(MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)))
+                                Text(
+                                    "📥 $tokenPrompt tok",
+                                    style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp, fontFamily = FontFamily.Monospace),
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Box(modifier = Modifier.width(1.dp).height(10.dp).background(MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)))
+                                Text(
+                                    "📤 $tokenCompletion tok",
+                                    style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp, fontFamily = FontFamily.Monospace),
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
                             }
                         }
                     }
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f))
                 }
-            } else {
-                // Main Dialog Stream render panel
+
                 Column(
                     modifier = Modifier
                         .weight(1f)
                         .fillMaxWidth()
                 ) {
-                    // Conversation history list
                     val listState = rememberLazyListState()
-                    val coroutineScope = rememberCoroutineScope()
 
                     DisposableEffect(Unit) {
                         onDispose {
@@ -417,11 +640,6 @@ fun ChatScreen(
                         }
                     }
 
-                    val latency by viewModel.latencyMs.collectAsStateWithLifecycle()
-                    val tokenPrompt by viewModel.tokenCountPrompt.collectAsStateWithLifecycle()
-                    val tokenCompletion by viewModel.tokenCountCompletion.collectAsStateWithLifecycle()
-                    val speedTPS by viewModel.tokensPerSec.collectAsStateWithLifecycle()
-
                     Box(
                         modifier = Modifier
                             .weight(1f)
@@ -433,12 +651,13 @@ fun ChatScreen(
                                 .fillMaxSize()
                                 .padding(horizontal = 12.dp),
                             verticalArrangement = Arrangement.spacedBy(10.dp),
-                            contentPadding = PaddingValues(top = 12.dp, bottom = 86.dp)
+                            contentPadding = PaddingValues(top = 12.dp, bottom = 16.dp)
                         ) {
                             items(activeMessages) { message ->
                                 MessageBubbleItem(
                                     message = message,
                                     isStreamingActive = isStreaming,
+                                    assistantName = displayTitle,
                                     onSimulateToolOutput = { toolName, output ->
                                         viewModel.simulateToolResponse(toolName, output)
                                     },
@@ -449,263 +668,15 @@ fun ChatScreen(
                                 )
                             }
                         }
-
-                        // Floating Stats Dashboard (High Density Overlay matching HTML layout spec)
-                        val estimatedCost = (tokenPrompt * 0.0000015 + tokenCompletion * 0.000002)
-                        Card(
-                            modifier = Modifier
-                                .align(Alignment.BottomCenter)
-                                .fillMaxWidth()
-                                .padding(12.dp)
-                                .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.4f), RoundedCornerShape(12.dp)),
-                            colors = CardDefaults.cardColors(
-                                containerColor = MaterialTheme.colorScheme.background.copy(alpha = 0.92f)
-                            ),
-                            shape = RoundedCornerShape(12.dp),
-                            elevation = CardDefaults.cardElevation(defaultElevation = 6.dp)
-                        ) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(vertical = 10.dp, horizontal = 12.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                // Latency Column
-                                Column(horizontalAlignment = Alignment.Start) {
-                                    Text(
-                                        "LATENCY",
-                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, letterSpacing = 1.sp, fontSize = 9.sp),
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                    Text(
-                                        text = if (latency > 0) "${latency}ms" else "READY",
-                                        style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold),
-                                        color = if (latency > 0) Color(0xFF4ADE80) else MaterialTheme.colorScheme.onSurface
-                                    )
-                                }
-                                Box(modifier = Modifier.width(1.dp).height(24.dp).background(MaterialTheme.colorScheme.outline.copy(alpha = 0.2f)))
-
-                                // Throughput Column
-                                Column(horizontalAlignment = Alignment.Start) {
-                                    Text(
-                                        "THROUGHPUT",
-                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, letterSpacing = 1.sp, fontSize = 9.sp),
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                    Text(
-                                        text = "${String.format("%.1f", speedTPS)} t/s",
-                                        style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold),
-                                        color = MaterialTheme.colorScheme.primary
-                                    )
-                                }
-                                Box(modifier = Modifier.width(1.dp).height(24.dp).background(MaterialTheme.colorScheme.outline.copy(alpha = 0.2f)))
-
-                                // Tokens Column
-                                Column(horizontalAlignment = Alignment.Start) {
-                                    Text(
-                                        "TOKENS",
-                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, letterSpacing = 1.sp, fontSize = 9.sp),
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                    Text(
-                                        text = "${tokenPrompt + tokenCompletion}",
-                                        style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
-                                        color = MaterialTheme.colorScheme.onSurface
-                                    )
-                                }
-                                Box(modifier = Modifier.width(1.dp).height(24.dp).background(MaterialTheme.colorScheme.outline.copy(alpha = 0.2f)))
-
-                                // Cost Column
-                                Column(horizontalAlignment = Alignment.Start) {
-                                    Text(
-                                        "COST",
-                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, letterSpacing = 1.sp, fontSize = 9.sp),
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                    Text(
-                                        text = "$${String.format("%.5f", estimatedCost)}",
-                                        style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
-                                        color = MaterialTheme.colorScheme.onSurface
-                                    )
-                                }
-                            }
-                        }
                     }
 
                     HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f))
 
-                    // Text Dialog Input box
                     ChatInputPanel(
                         viewModel = viewModel,
                         isStreaming = isStreaming,
                         bottomPadding = bottomPadding
                     )
-                }
-            }
-        }
-
-        // Navigation Drawer Overlay animators
-        AnimatedVisibility(
-            visible = showSessionDrawer,
-            enter = fadeIn(),
-            exit = fadeOut()
-        ) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(Color.Black.copy(alpha = 0.5f))
-                    .clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null
-                    ) {
-                        showSessionDrawer = false
-                    }
-            )
-        }
-
-        AnimatedVisibility(
-            visible = showSessionDrawer,
-            enter = slideInHorizontally(initialOffsetX = { -it }) + fadeIn(),
-            exit = slideOutHorizontally(targetOffsetX = { -it }) + fadeOut(),
-            modifier = Modifier.align(Alignment.CenterStart)
-        ) {
-            Surface(
-                modifier = Modifier
-                    .fillMaxHeight()
-                    .width(280.dp)
-                    .clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null
-                    ) {
-                        // Prevent click bubble propagation to scrim
-                    },
-                tonalElevation = 8.dp,
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(start = 12.dp, top = 12.dp, end = 12.dp, bottom = 12.dp + bottomPadding)
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            "会话管理",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                        IconButton(onClick = { showSessionDrawer = false }) {
-                            Icon(Icons.Default.Close, contentDescription = "关闭", modifier = Modifier.size(18.dp))
-                        }
-                    }
-
-                    OutlinedTextField(
-                        value = searchQuery,
-                        onValueChange = { searchQuery = it },
-                        placeholder = { Text("搜索会话...") },
-                        leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
-                        modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
-                        singleLine = true,
-                        shape = RoundedCornerShape(12.dp)
-                    )
-
-                    Button(
-                        onClick = { showCreateChatDialog = true },
-                        modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
-                        shape = RoundedCornerShape(12.dp)
-                    ) {
-                        Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("开启新对话")
-                    }
-
-                    HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
-
-                    if (filteredSessions.isEmpty()) {
-                        Box(
-                            modifier = Modifier.fillMaxSize(),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                "暂无会话历史",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    } else {
-                        LazyColumn(
-                            modifier = Modifier.fillMaxSize(),
-                            verticalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            items(filteredSessions) { item ->
-                                val isSelected = item.id == currentSessionId
-                                Card(
-                                    onClick = {
-                                        viewModel.selectSession(item.id)
-                                        showSessionDrawer = false
-                                    },
-                                    colors = CardDefaults.cardColors(
-                                        containerColor = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
-                                    ),
-                                    modifier = Modifier.fillMaxWidth(),
-                                    shape = RoundedCornerShape(12.dp)
-                                ) {
-                                    Row(
-                                        modifier = Modifier.padding(12.dp),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        // Mode Badge Color
-                                        val badgeColor = when (item.mode) {
-                                            "NPC" -> Color(0xFF6200EE)
-                                            "AGENT" -> Color(0xFF00796B)
-                                            else -> Color(0xFF1E88E5)
-                                        }
-
-                                        Box(
-                                            modifier = Modifier
-                                                .size(10.dp)
-                                                .clip(CircleShape)
-                                                .background(badgeColor)
-                                        )
-
-                                        Spacer(modifier = Modifier.width(10.dp))
-
-                                        Column(modifier = Modifier.weight(1f)) {
-                                            Text(
-                                                item.title,
-                                                style = MaterialTheme.typography.bodyMedium,
-                                                fontWeight = FontWeight.Bold,
-                                                maxLines = 1
-                                            )
-                                            Text(
-                                                item.lastMessage,
-                                                style = MaterialTheme.typography.bodySmall,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                                maxLines = 1
-                                            )
-                                        }
-
-                                        IconButton(
-                                            onClick = { viewModel.deleteSession(item.id) },
-                                            modifier = Modifier.size(24.dp)
-                                        ) {
-                                            Icon(
-                                                Icons.Default.Delete,
-                                                contentDescription = "删除该会话",
-                                                tint = MaterialTheme.colorScheme.error.copy(alpha = 0.7f),
-                                                modifier = Modifier.size(16.dp)
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
                 }
             }
         }
@@ -913,6 +884,31 @@ fun ChatScreen(
             }
         }
     }
+
+    if (sessionToDeleteId != null) {
+        AlertDialog(
+            onDismissRequest = { sessionToDeleteId = null },
+            title = { Text("确认删除会话") },
+            text = { Text("您确定要彻底删除该对话及其所有历史记录吗？此操作无法撤销。") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        sessionToDeleteId?.let { id ->
+                            viewModel.deleteSession(id)
+                        }
+                        sessionToDeleteId = null
+                    }
+                ) {
+                    Text("确认删除", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { sessionToDeleteId = null }) {
+                    Text("取消")
+                }
+            }
+        )
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -925,8 +921,6 @@ fun ChatInputPanel(
     val settings by viewModel.settingsFlow.collectAsStateWithLifecycle(initialValue = AppSettings())
     val activeSettings = settings ?: AppSettings()
     var inputStr by remember { mutableStateOf("") }
-    var modelExpanded by remember { mutableStateOf(false) }
-    val modelsList by viewModel.modelsList.collectAsStateWithLifecycle()
 
     val keyboardPadding = WindowInsets.ime.asPaddingValues().calculateBottomPadding()
     val isKeyboardOpen = keyboardPadding > 0.dp
@@ -951,48 +945,8 @@ fun ChatInputPanel(
                 .fillMaxWidth()
                 .padding(bottom = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
+            horizontalArrangement = Arrangement.Start
         ) {
-            // Model choose dropdown trigger
-            Box {
-                OutlinedButton(
-                    onClick = { modelExpanded = true },
-                    modifier = Modifier.height(36.dp),
-                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
-                    shape = RoundedCornerShape(8.dp)
-                ) {
-                    Icon(Icons.Default.ModelTraining, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text(
-                        activeSettings.defaultModel,
-                        style = MaterialTheme.typography.bodySmall,
-                        maxLines = 1
-                    )
-                    Icon(Icons.Default.ArrowDropDown, contentDescription = null, modifier = Modifier.size(16.dp))
-                }
-                DropdownMenu(
-                    expanded = modelExpanded,
-                    onDismissRequest = { modelExpanded = false }
-                ) {
-                    if (modelsList.isEmpty()) {
-                        DropdownMenuItem(
-                            text = { Text("没有载入模型，请到设置测试连接") },
-                            onClick = { modelExpanded = false }
-                        )
-                    } else {
-                        modelsList.forEach { modelName ->
-                            DropdownMenuItem(
-                                text = { Text(modelName) },
-                                onClick = {
-                                    viewModel.updateSelectedModel(modelName)
-                                    modelExpanded = false
-                                }
-                            )
-                        }
-                    }
-                }
-            }
-
             // Toggles
             Row(
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -1096,6 +1050,7 @@ fun Modifier.scale(scale: Float): Modifier = this.then(
 fun MessageBubbleItem(
     message: ChatMessage,
     isStreamingActive: Boolean,
+    assistantName: String = "AI 助理",
     onSimulateToolOutput: (String, String) -> Unit,
     onDeleteMessage: () -> Unit,
     onEditMessage: (String) -> Unit
@@ -1185,7 +1140,7 @@ fun MessageBubbleItem(
                             text = when {
                                 isUser -> "你"
                                 isSystem -> "系统/工具反馈"
-                                else -> "AI 助理"
+                                else -> assistantName
                             },
                             style = MaterialTheme.typography.bodySmall,
                             fontWeight = FontWeight.Bold,
@@ -1384,7 +1339,7 @@ fun MessageBubbleItem(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                text = "⏱️ ${message.latencyMs}ms | ⚡ ${String.format("%.1f", message.tokensPerSec)} t/s | 📝 ${message.totalTokens} tokens",
+                                text = "⏱️ ${message.latencyMs}ms | ⚡ ${String.format("%.1f", message.tokensPerSec)} t/s | 📥 ${message.promptTokens} | 📤 ${message.completionTokens}",
                                 style = MaterialTheme.typography.bodySmall.copy(fontSize = 10.sp),
                                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f)
                             )
@@ -1635,6 +1590,9 @@ fun PersonaManagementScreen(viewModel: MainViewModel, onNavigateToTab: (String) 
     var editingNpc by remember { mutableStateOf<NpcCharacter?>(null) }
     var editingAgent by remember { mutableStateOf<AgentConfig?>(null) }
     var editingTool by remember { mutableStateOf<McpTool?>(null) }
+    var npcToDelete by remember { mutableStateOf<NpcCharacter?>(null) }
+    var agentToDelete by remember { mutableStateOf<AgentConfig?>(null) }
+    var toolToDelete by remember { mutableStateOf<McpTool?>(null) }
 
     Column(
         modifier = Modifier
@@ -1700,7 +1658,7 @@ fun PersonaManagementScreen(viewModel: MainViewModel, onNavigateToTab: (String) 
                             NpcConfigCard(
                                 npc = npcItem,
                                 onEdit = { editingNpc = npcItem },
-                                onDelete = { viewModel.removeNpc(npcItem.id) },
+                                onDelete = { npcToDelete = npcItem },
                                 onStartChat = {
                                     viewModel.createNewSession("${npcItem.name}-${currentDateStr}", "NPC", npcItem.id)
                                     onNavigateToTab("chat")
@@ -1738,7 +1696,7 @@ fun PersonaManagementScreen(viewModel: MainViewModel, onNavigateToTab: (String) 
                             AgentConfigCard(
                                 agent = agentItem,
                                 onEdit = { editingAgent = agentItem },
-                                onDelete = { viewModel.removeAgent(agentItem.id) },
+                                onDelete = { agentToDelete = agentItem },
                                 onStartChat = {
                                     viewModel.createNewSession("${agentItem.name}-${currentDateStr}", "AGENT", agentItem.id)
                                     onNavigateToTab("chat")
@@ -1776,7 +1734,7 @@ fun PersonaManagementScreen(viewModel: MainViewModel, onNavigateToTab: (String) 
                             McpToolCard(
                                 tool = toolItem,
                                 onEdit = { editingTool = toolItem },
-                                onDelete = { viewModel.removeMcpTool(toolItem.id) }
+                                onDelete = { toolToDelete = toolItem }
                             )
                         }
                     }
@@ -2309,6 +2267,75 @@ fun PersonaManagementScreen(viewModel: MainViewModel, onNavigateToTab: (String) 
             }
         }
     }
+
+    if (npcToDelete != null) {
+        AlertDialog(
+            onDismissRequest = { npcToDelete = null },
+            title = { Text("确认删除角色") },
+            text = { Text("您确定要永久删除 ${npcToDelete?.name} 角色配置吗？此操作无法撤销。") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        npcToDelete?.let { viewModel.removeNpc(it.id) }
+                        npcToDelete = null
+                    }
+                ) {
+                    Text("确认删除", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { npcToDelete = null }) {
+                    Text("取消")
+                }
+            }
+        )
+    }
+
+    if (agentToDelete != null) {
+        AlertDialog(
+            onDismissRequest = { agentToDelete = null },
+            title = { Text("确认删除工作流") },
+            text = { Text("您确定要永久删除 ${agentToDelete?.name} 工作流配置吗？此操作无法撤销。") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        agentToDelete?.let { viewModel.removeAgent(it.id) }
+                        agentToDelete = null
+                    }
+                ) {
+                    Text("确认删除", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { agentToDelete = null }) {
+                    Text("取消")
+                }
+            }
+        )
+    }
+
+    if (toolToDelete != null) {
+        AlertDialog(
+            onDismissRequest = { toolToDelete = null },
+            title = { Text("确认删除工具") },
+            text = { Text("您确定要永久删除工具 ${toolToDelete?.name} 吗？此操作无法撤销。") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        toolToDelete?.let { viewModel.removeMcpTool(it.id) }
+                        toolToDelete = null
+                    }
+                ) {
+                    Text("确认删除", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { toolToDelete = null }) {
+                    Text("取消")
+                }
+            }
+        )
+    }
 }
 
 @Composable
@@ -2631,6 +2658,7 @@ fun SettingsScreen(viewModel: MainViewModel) {
     val modelsList by viewModel.modelsList.collectAsStateWithLifecycle()
     val testResultMessage by viewModel.testResultMessage.collectAsStateWithLifecycle()
     val allMessagesHistory by viewModel.allSessionsFlow.collectAsStateWithLifecycle(initialValue = emptyList())
+    val careerStats by viewModel.careerStatsFlow.collectAsStateWithLifecycle()
 
     // Internal edits
     var editedUrl by remember { mutableStateOf(activeSettings.baseUrl) }
@@ -2890,6 +2918,117 @@ fun SettingsScreen(viewModel: MainViewModel) {
             }
         }
 
+        // Career Statistics Section
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 16.dp),
+            shape = RoundedCornerShape(16.dp),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.12f)),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        "生涯统计",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    TextButton(
+                        onClick = { viewModel.resetCareerStats() },
+                        colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                    ) {
+                        Icon(Icons.Default.DeleteOutline, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("清零", style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold))
+                    }
+                }
+
+                Text(
+                    "统计您在本沙盒系统中的累计代币消耗与对话偏好：",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(bottom = 12.dp)
+                )
+
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        StatItemCard(
+                            title = "输入 Token (Input)",
+                            value = "${careerStats.inputTokens}",
+                            icon = "📥",
+                            modifier = Modifier.weight(1f)
+                        )
+                        StatItemCard(
+                            title = "输出 Token (Output)",
+                            value = "${careerStats.outputTokens}",
+                            icon = "📤",
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        StatItemCard(
+                            title = "累计总 Token 量",
+                            value = "${careerStats.totalTokens}",
+                            icon = "📊",
+                            modifier = Modifier.weight(1f)
+                        )
+                        StatItemCard(
+                            title = "总对话轮数",
+                            value = "${careerStats.totalRounds} 轮",
+                            icon = "💬",
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        StatItemCard(
+                            title = "平均单次对话轮数",
+                            value = "${String.format("%.1f", careerStats.avgRounds)} 轮",
+                            icon = "📈",
+                            modifier = Modifier.weight(1f)
+                        )
+                        StatItemCard(
+                            title = "最活跃 NPC 角色",
+                            value = careerStats.mostChattedNpc,
+                            icon = "🎭",
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        StatItemCard(
+                            title = "最活跃 Agent 工作流",
+                            value = careerStats.mostChattedAgent,
+                            icon = "🤖",
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
+            }
+        }
+
         // Metrics Visual Chart (Custom Canvas performance graphs)
         Card(
             modifier = Modifier.fillMaxWidth(),
@@ -2990,3 +3129,41 @@ fun SettingsScreen(viewModel: MainViewModel) {
 }
 
 data class BenchmarkItem(val name: String, val value: Float)
+
+@Composable
+fun StatItemCard(
+    title: String,
+    value: String,
+    icon: String,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        shape = RoundedCornerShape(8.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.08f)),
+        modifier = modifier
+    ) {
+        Row(
+            modifier = Modifier.padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(icon, style = MaterialTheme.typography.titleMedium)
+            Spacer(modifier = Modifier.width(10.dp))
+            Column {
+                Text(
+                    title,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    value,
+                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                )
+            }
+        }
+    }
+}

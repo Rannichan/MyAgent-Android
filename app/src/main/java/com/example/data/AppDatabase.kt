@@ -73,6 +73,9 @@ interface SessionDao {
 
 @Dao
 interface MessageDao {
+    @Query("SELECT * FROM messages")
+    fun getAllMessagesFlow(): Flow<List<ChatMessage>>
+
     @Query("SELECT * FROM messages WHERE sessionId = :sessionId ORDER BY timestamp ASC")
     fun getMessagesFlow(sessionId: Long): Flow<List<ChatMessage>>
 
@@ -119,7 +122,7 @@ interface McpToolDao {
         ChatMessage::class,
         McpTool::class
     ],
-    version = 2,
+    version = 3,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {

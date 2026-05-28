@@ -16,7 +16,8 @@ data class AppSettings(
     val maxTokens: Int = 2048,
     val isStreaming: Boolean = true,
     val isThinkingModeEnabled: Boolean = true,
-    val isToolCallsEnabled: Boolean = false
+    val isToolCallsEnabled: Boolean = false,
+    val statsResetTime: Long = 0L
 )
 
 @Entity(tableName = "npcs")

@@ -13,6 +13,9 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.firstOrNull
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -43,6 +46,16 @@ const val DEFAULT_USER_MD = """# User.md
 - Access Rights: Level 5 Root Access.
 """
 
+data class CareerStats(
+    val inputTokens: Long = 0L,
+    val outputTokens: Long = 0L,
+    val totalTokens: Long = 0L,
+    val totalRounds: Long = 0L,
+    val avgRounds: Double = 0.0,
+    val mostChattedNpc: String = "无",
+    val mostChattedAgent: String = "无"
+)
+
 class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val repository = AppRepository(application)
 
@@ -52,6 +65,82 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val allAgentsFlow = repository.allAgentsFlow
     val allSessionsFlow = repository.allSessionsFlow
     val allMcpToolsFlow = repository.allMcpToolsFlow
+
+    val careerStatsFlow: StateFlow<CareerStats> = combine(
+        repository.allMessagesFlow,
+        repository.allSessionsFlow,
+        repository.allNpcsFlow,
+        repository.allAgentsFlow,
+        repository.settingsFlow
+    ) { messages, sessions, npcs, agents, settings ->
+        val resetTime = settings?.statsResetTime ?: 0L
+        val filteredMessages = messages.filter { it.timestamp >= resetTime }
+        
+        val inputTokens = filteredMessages.sumOf { it.promptTokens.toLong() }
+        val outputTokens = filteredMessages.sumOf { it.completionTokens.toLong() }
+        val totalTokens = inputTokens + outputTokens
+        
+        val totalRounds = filteredMessages.count { it.role == "user" }.toLong()
+        
+        val activeSessionIds = filteredMessages.map { it.sessionId }.distinct()
+        val avgRounds = if (activeSessionIds.isNotEmpty()) {
+            totalRounds.toDouble() / activeSessionIds.size
+        } else {
+            0.0
+        }
+        
+        val sessionMessageCounts = filteredMessages
+            .filter { it.role == "user" }
+            .groupBy { it.sessionId }
+            .mapValues { it.value.size }
+            
+        var mostChattedNpc = "无"
+        var mostChattedAgent = "无"
+        
+        if (sessionMessageCounts.isNotEmpty()) {
+            val npcSessionsMap = sessions.filter { it.mode == "NPC" }.associateBy { it.id }
+            val npcTalkCounts = mutableMapOf<Long, Int>()
+            sessionMessageCounts.forEach { (sessId, count) ->
+                val sess = npcSessionsMap[sessId]
+                if (sess != null) {
+                    val npcId = sess.associatedId
+                    npcTalkCounts[npcId] = (npcTalkCounts[npcId] ?: 0) + count
+                }
+            }
+            val maxNpcId = npcTalkCounts.maxByOrNull { it.value }?.key
+            if (maxNpcId != null) {
+                mostChattedNpc = npcs.find { it.id == maxNpcId }?.name ?: "已删除角色"
+            }
+            
+            val agentSessionsMap = sessions.filter { it.mode == "AGENT" }.associateBy { it.id }
+            val agentTalkCounts = mutableMapOf<Long, Int>()
+            sessionMessageCounts.forEach { (sessId, count) ->
+                val sess = agentSessionsMap[sessId]
+                if (sess != null) {
+                    val agentId = sess.associatedId
+                    agentTalkCounts[agentId] = (agentTalkCounts[agentId] ?: 0) + count
+                }
+            }
+            val maxAgentId = agentTalkCounts.maxByOrNull { it.value }?.key
+            if (maxAgentId != null) {
+                mostChattedAgent = agents.find { it.id == maxAgentId }?.name ?: "已删除工作流"
+            }
+        }
+        
+        CareerStats(
+            inputTokens = inputTokens,
+            outputTokens = outputTokens,
+            totalTokens = totalTokens,
+            totalRounds = totalRounds,
+            avgRounds = avgRounds,
+            mostChattedNpc = mostChattedNpc,
+            mostChattedAgent = mostChattedAgent
+        )
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = CareerStats()
+    )
 
     private val _currentSessionId = MutableStateFlow<Long?>(null)
     val currentSessionId: StateFlow<Long?> = _currentSessionId.asStateFlow()
@@ -232,6 +321,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 isThinkingModeEnabled = thinking,
                 isToolCallsEnabled = tools
             ))
+        }
+    }
+
+    fun resetCareerStats() {
+        viewModelScope.launch {
+            val s = repository.getSettings()
+            repository.updateSettings(s.copy(statsResetTime = System.currentTimeMillis()))
         }
     }
 

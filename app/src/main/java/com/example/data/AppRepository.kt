@@ -19,6 +19,7 @@ class AppRepository(context: Context) {
     val allAgentsFlow: Flow<List<AgentConfig>> = agentDao.getAllAgentsFlow()
     val allSessionsFlow: Flow<List<ChatSession>> = sessionDao.getAllSessionsFlow()
     val allMcpToolsFlow: Flow<List<McpTool>> = mcpToolDao.getAllMcpToolsFlow()
+    val allMessagesFlow: Flow<List<ChatMessage>> = messageDao.getAllMessagesFlow()
 
     suspend fun getSettings(): AppSettings {
         var settings = settingsDao.getSettings()
