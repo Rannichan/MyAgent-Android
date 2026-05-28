@@ -11,12 +11,14 @@ class AppRepository(context: Context) {
     val agentDao = database.agentDao()
     val sessionDao = database.sessionDao()
     val messageDao = database.messageDao()
+    val mcpToolDao = database.mcpToolDao()
     private val openAiService = OpenAiService()
 
     val settingsFlow: Flow<AppSettings?> = settingsDao.getSettingsFlow()
     val allNpcsFlow: Flow<List<NpcCharacter>> = npcDao.getAllNpcsFlow()
     val allAgentsFlow: Flow<List<AgentConfig>> = agentDao.getAllAgentsFlow()
     val allSessionsFlow: Flow<List<ChatSession>> = sessionDao.getAllSessionsFlow()
+    val allMcpToolsFlow: Flow<List<McpTool>> = mcpToolDao.getAllMcpToolsFlow()
 
     suspend fun getSettings(): AppSettings {
         var settings = settingsDao.getSettings()
@@ -138,7 +140,7 @@ class AppRepository(context: Context) {
     }
 
     // Models & LLM Services
-    suspend fun fetchModelsFromEndpoint(baseUrl: String, apiKey: String): List<String> {
+    suspend fun fetchModelsFromEndpoint(baseUrl: String, apiKey: String): ModelFetchResult {
         return openAiService.testConnectionAndGetModels(baseUrl, apiKey)
     }
 
@@ -148,5 +150,14 @@ class AppRepository(context: Context) {
         request: ChatCompletionRequest
     ): Flow<ChatStreamChunk> {
         return openAiService.streamChatCompletions(baseUrl, apiKey, request)
+    }
+
+    // McpTool methods
+    suspend fun insertMcpTool(tool: McpTool): Long {
+        return mcpToolDao.insertMcpTool(tool)
+    }
+
+    suspend fun deleteMcpTool(id: Long) {
+        mcpToolDao.deleteMcpToolById(id)
     }
 }

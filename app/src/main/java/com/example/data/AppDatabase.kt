@@ -95,15 +95,31 @@ interface MessageDao {
     suspend fun deleteMessagesAfterId(sessionId: Long, messageId: Long)
 }
 
+@Dao
+interface McpToolDao {
+    @Query("SELECT * FROM mcp_tools ORDER BY createdAt DESC")
+    fun getAllMcpToolsFlow(): Flow<List<McpTool>>
+
+    @Query("SELECT * FROM mcp_tools WHERE id = :id LIMIT 1")
+    suspend fun getMcpToolById(id: Long): McpTool?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertMcpTool(tool: McpTool): Long
+
+    @Query("DELETE FROM mcp_tools WHERE id = :id")
+    suspend fun deleteMcpToolById(id: Long)
+}
+
 @Database(
     entities = [
         AppSettings::class,
         NpcCharacter::class,
         AgentConfig::class,
         ChatSession::class,
-        ChatMessage::class
+        ChatMessage::class,
+        McpTool::class
     ],
-    version = 1,
+    version = 2,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -112,6 +128,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun agentDao(): AgentDao
     abstract fun sessionDao(): SessionDao
     abstract fun messageDao(): MessageDao
+    abstract fun mcpToolDao(): McpToolDao
 
     companion object {
         @Volatile

@@ -24,6 +24,11 @@ sealed class ChatStreamChunk {
     object Done : ChatStreamChunk()
 }
 
+data class ModelFetchResult(
+    val idList: List<String>,
+    val rawResponse: String
+)
+
 class OpenAiService {
     private val moshi = Moshi.Builder()
         .addLast(KotlinJsonAdapterFactory())
@@ -43,30 +48,31 @@ class OpenAiService {
         return if (url.trim().endsWith("/")) url.trim() else "${url.trim()}/"
     }
 
-    suspend fun testConnectionAndGetModels(baseUrl: String, apiKey: String): List<String> {
+    suspend fun testConnectionAndGetModels(baseUrl: String, apiKey: String): ModelFetchResult {
         return withContext(Dispatchers.IO) {
-            try {
-                val url = cleanUrl(baseUrl) + "models"
-                val requestBuilder = Request.Builder()
-                    .url(url)
-                    .get()
-                
-                if (apiKey.isNotBlank()) {
-                    requestBuilder.addHeader("Authorization", "Bearer $apiKey")
-                }
+            val url = cleanUrl(baseUrl) + "models"
+            val requestBuilder = Request.Builder()
+                .url(url)
+                .get()
+            
+            if (apiKey.isNotBlank()) {
+                requestBuilder.addHeader("Authorization", "Bearer $apiKey")
+            }
 
-                client.newCall(requestBuilder.build()).execute().use { response ->
-                    if (!response.isSuccessful) {
-                        Log.e("OpenAiService", "Failed to retrieve models: code=${response.code}")
-                        return@withContext emptyList()
-                    }
-                    val bodyString = response.body?.string() ?: return@withContext emptyList()
-                    val modelsList = responseAdapter.fromJson(bodyString)
-                    modelsList?.data?.map { it.id }?.sorted() ?: emptyList()
+            client.newCall(requestBuilder.build()).execute().use { response ->
+                val bodyString = response.body?.string() ?: ""
+                if (!response.isSuccessful) {
+                    Log.e("OpenAiService", "Failed to retrieve models: code=${response.code}")
+                    val errText = if (bodyString.isNotBlank()) bodyString else "Empty response"
+                    throw IOException("HTTP ${response.code} ($errText)")
                 }
-            } catch (e: Exception) {
-                Log.e("OpenAiService", "Error in testConnectionAndGetModels", e)
-                emptyList()
+                val modelsList = try {
+                    responseAdapter.fromJson(bodyString)
+                } catch (e: Exception) {
+                    null
+                }
+                val ids = modelsList?.data?.map { it.id }?.sorted() ?: emptyList()
+                ModelFetchResult(ids, bodyString)
             }
         }
     }

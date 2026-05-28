@@ -94,14 +94,14 @@ fun MainAppContainer(viewModel: MainViewModel) {
                         NavigationBarItem(
                             selected = currentTab == "personas",
                             onClick = { currentTab = "personas" },
-                            icon = { Icon(Icons.Default.RecentActors, contentDescription = "人设配置") },
-                            label = { Text("人设/Agent") }
+                            icon = { Icon(Icons.Default.RecentActors, contentDescription = "角色工坊") },
+                            label = { Text("角色工坊") }
                         )
                         NavigationBarItem(
                             selected = currentTab == "settings",
                             onClick = { currentTab = "settings" },
-                            icon = { Icon(Icons.Default.Settings, contentDescription = "设置机能") },
-                            label = { Text("设置/分析") }
+                            icon = { Icon(Icons.Default.Settings, contentDescription = "设置") },
+                            label = { Text("设置") }
                         )
                     }
                 }
@@ -111,7 +111,7 @@ fun MainAppContainer(viewModel: MainViewModel) {
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(
-                        top = innerPadding.calculateTopPadding(),
+                        top = if (currentTab == "chat") 0.dp else innerPadding.calculateTopPadding(),
                         bottom = if (currentTab == "chat") 0.dp else innerPadding.calculateBottomPadding()
                     )
             ) {
@@ -127,7 +127,7 @@ fun MainAppContainer(viewModel: MainViewModel) {
                             viewModel = viewModel,
                             bottomPadding = innerPadding.calculateBottomPadding()
                         )
-                        "personas" -> PersonaManagementScreen(viewModel = viewModel)
+                        "personas" -> PersonaManagementScreen(viewModel = viewModel, onNavigateToTab = { currentTab = it })
                         "settings" -> SettingsScreen(viewModel = viewModel)
                     }
                 }
@@ -164,16 +164,33 @@ fun ChatScreen(
             val activeSession = sessions.find { it.id == currentSessionId }
             val context = LocalContext.current
 
+            val displayTitle = if (activeSession != null) {
+                when (activeSession.mode) {
+                    "NPC" -> {
+                        val npc = npcs.find { it.id == activeSession.associatedId }
+                        npc?.name ?: activeSession.title
+                    }
+                    "AGENT" -> {
+                        val agent = agents.find { it.id == activeSession.associatedId }
+                        agent?.name ?: activeSession.title
+                    }
+                    else -> activeSession.title
+                }
+            } else {
+                "Agent Hub 对话"
+            }
+
             TopAppBar(
                 title = {
                     Column {
                         Text(
-                            activeSession?.title ?: "Agent Hub 对话",
+                            displayTitle,
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.onSurface
                         )
                         val settingsItem by viewModel.settingsFlow.collectAsStateWithLifecycle(initialValue = AppSettings())
+                        val isApiConnected by viewModel.isApiConnected.collectAsStateWithLifecycle()
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(4.dp),
@@ -183,12 +200,12 @@ fun ChatScreen(
                                 modifier = Modifier
                                     .size(6.dp)
                                     .clip(CircleShape)
-                                    .background(Color(0xFF4ADE80))
+                                    .background(if (isApiConnected) Color(0xFF10B981) else Color(0xFFEF4444))
                             )
                             Text(
-                                (settingsItem?.defaultModel ?: "gpt-4o-mini").uppercase(),
+                                if (isApiConnected) (settingsItem?.defaultModel ?: "gpt-4o-mini").uppercase() else "not connected",
                                 style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
-                                color = MaterialTheme.colorScheme.primary,
+                                color = if (isApiConnected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
                                 fontWeight = FontWeight.Bold
                             )
                         }
@@ -248,7 +265,8 @@ fun ChatScreen(
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.surface
-                )
+                ),
+                windowInsets = TopAppBarDefaults.windowInsets
             )
 
             HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f))
@@ -527,9 +545,12 @@ fun ChatScreen(
             }
         }
 
-        // Navigation Drawer Overlay
-        if (showSessionDrawer) {
-            // Scrim
+        // Navigation Drawer Overlay animators
+        AnimatedVisibility(
+            visible = showSessionDrawer,
+            enter = fadeIn(),
+            exit = fadeOut()
+        ) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -541,13 +562,18 @@ fun ChatScreen(
                         showSessionDrawer = false
                     }
             )
+        }
 
-            // Drawer content surface
+        AnimatedVisibility(
+            visible = showSessionDrawer,
+            enter = slideInHorizontally(initialOffsetX = { -it }) + fadeIn(),
+            exit = slideOutHorizontally(targetOffsetX = { -it }) + fadeOut(),
+            modifier = Modifier.align(Alignment.CenterStart)
+        ) {
             Surface(
                 modifier = Modifier
                     .fillMaxHeight()
                     .width(280.dp)
-                    .align(Alignment.CenterStart)
                     .clickable(
                         interactionSource = remember { MutableInteractionSource() },
                         indication = null
@@ -557,7 +583,11 @@ fun ChatScreen(
                 tonalElevation = 8.dp,
                 border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
             ) {
-                Column(modifier = Modifier.fillMaxSize().padding(12.dp)) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(start = 12.dp, top = 12.dp, end = 12.dp, bottom = 12.dp + bottomPadding)
+                ) {
                     Row(
                         modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -696,16 +726,44 @@ fun ChatScreen(
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     Text(
-                        "创建对话沙盒",
+                        "创建对话",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.primary,
                         modifier = Modifier.padding(bottom = 16.dp)
                     )
 
-                    var titleText by remember { mutableStateOf("未命名会话") }
-                    var modeChoice by remember { mutableStateOf("STANDARD") } // STANDARD, NPC, AGENT
-                    var selectedItemId by remember { mutableStateOf(-1L) }
+                    val currentDateStr = remember {
+                        java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.getDefault()).format(java.util.Date())
+                    }
+                    var modeChoice by remember { mutableStateOf(if (npcs.isNotEmpty()) "NPC" else "AGENT") } // NPC, AGENT
+                    var selectedItemId by remember(modeChoice) {
+                        mutableStateOf(
+                            if (modeChoice == "NPC" && npcs.isNotEmpty()) npcs.first().id
+                            else if (modeChoice == "AGENT" && agents.isNotEmpty()) agents.first().id
+                            else -1L
+                        )
+                    }
+                    var titleText by remember {
+                        val initialName = if (modeChoice == "NPC" && npcs.isNotEmpty()) {
+                            npcs.first().name
+                        } else if (modeChoice == "AGENT" && agents.isNotEmpty()) {
+                            agents.first().name
+                        } else {
+                            "未命名"
+                        }
+                        mutableStateOf("${initialName}-${currentDateStr}")
+                    }
+
+                    LaunchedEffect(selectedItemId, modeChoice) {
+                        if (modeChoice == "NPC" && npcs.isNotEmpty()) {
+                            val activeNpc = npcs.find { it.id == selectedItemId } ?: npcs.first()
+                            titleText = "${activeNpc.name}-${currentDateStr}"
+                        } else if (modeChoice == "AGENT" && agents.isNotEmpty()) {
+                            val activeAgent = agents.find { it.id == selectedItemId } ?: agents.first()
+                            titleText = "${activeAgent.name}-${currentDateStr}"
+                        }
+                    }
 
                     OutlinedTextField(
                         value = titleText,
@@ -727,13 +785,12 @@ fun ChatScreen(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        listOf("STANDARD" to "标准", "NPC" to "NPC人设", "AGENT" to "Agent").forEach { (v, l) ->
+                        listOf("NPC" to "NPC人设", "AGENT" to "Agent").forEach { (v, l) ->
                             FilterChip(
                                 selected = modeChoice == v,
                                 onClick = {
                                     modeChoice = v
-                                    if (v == "STANDARD") selectedItemId = -1L
-                                    else if (v == "NPC" && npcs.isNotEmpty()) selectedItemId = npcs.first().id
+                                    if (v == "NPC" && npcs.isNotEmpty()) selectedItemId = npcs.first().id
                                     else if (v == "AGENT" && agents.isNotEmpty()) selectedItemId = agents.first().id
                                 },
                                 label = { Text(l) }
@@ -746,7 +803,7 @@ fun ChatScreen(
                     if (modeChoice == "NPC") {
                         if (npcs.isEmpty()) {
                             Text(
-                                "⚠️ 请先在第二栏“人设/Agent”标签页创立或载入NPC人设数据！",
+                                "⚠️ 请先在“角色工坊”标签页创立或载入NPC人设数据！",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.error,
                                 modifier = Modifier.padding(bottom = 12.dp)
@@ -779,9 +836,6 @@ fun ChatScreen(
                                             text = { Text(npcItem.name) },
                                             onClick = {
                                                 selectedItemId = npcItem.id
-                                                if (titleText == "未命名会话" || titleText.startsWith("聊：")) {
-                                                    titleText = "聊：Npc ${npcItem.name}"
-                                                }
                                                 expandedDropdown = false
                                             }
                                         )
@@ -794,7 +848,7 @@ fun ChatScreen(
                     if (modeChoice == "AGENT") {
                         if (agents.isEmpty()) {
                             Text(
-                                "⚠️ 请先在第二栏配置或生成Agent！",
+                                "⚠️ 请先在“角色工坊”配置或生成Agent！",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.error,
                                 modifier = Modifier.padding(bottom = 12.dp)
@@ -827,9 +881,6 @@ fun ChatScreen(
                                             text = { Text(agentItem.name) },
                                             onClick = {
                                                 selectedItemId = agentItem.id
-                                                if (titleText == "未命名会话" || titleText.startsWith("跑：")) {
-                                                    titleText = "跑：Agent ${agentItem.name}"
-                                                }
                                                 expandedDropdown = false
                                             }
                                         )
@@ -1572,15 +1623,18 @@ fun ToolCallInterceptCard(
 
 // ----------------== PERSONA / AGENT MANAGEMENT ==----------------
 @Composable
-fun PersonaManagementScreen(viewModel: MainViewModel) {
+fun PersonaManagementScreen(viewModel: MainViewModel, onNavigateToTab: (String) -> Unit) {
     val npcs by viewModel.allNpcsFlow.collectAsStateWithLifecycle(initialValue = emptyList())
     val agents by viewModel.allAgentsFlow.collectAsStateWithLifecycle(initialValue = emptyList())
+    val mcpTools by viewModel.allMcpToolsFlow.collectAsStateWithLifecycle(initialValue = emptyList())
 
-    var activeSubTab by remember { mutableStateOf("npcs") } // "npcs" or "agents"
+    var activeSubTab by remember { mutableStateOf("npcs") } // "npcs", "agents" or "tools_mcp"
     var showCreateNpcDialog by remember { mutableStateOf(false) }
     var showCreateAgentDialog by remember { mutableStateOf(false) }
+    var showCreateToolDialog by remember { mutableStateOf(false) }
     var editingNpc by remember { mutableStateOf<NpcCharacter?>(null) }
     var editingAgent by remember { mutableStateOf<AgentConfig?>(null) }
+    var editingTool by remember { mutableStateOf<McpTool?>(null) }
 
     Column(
         modifier = Modifier
@@ -1588,7 +1642,7 @@ fun PersonaManagementScreen(viewModel: MainViewModel) {
             .padding(16.dp)
     ) {
         Text(
-            "系统模态个体管理工作室",
+            "角色工坊",
             style = MaterialTheme.typography.titleLarge,
             fontWeight = FontWeight.Bold,
             color = MaterialTheme.colorScheme.primary,
@@ -1596,92 +1650,145 @@ fun PersonaManagementScreen(viewModel: MainViewModel) {
         )
 
         // Sub tab strip selector
+        val subTabIndex = when (activeSubTab) {
+            "npcs" -> 0
+            "agents" -> 1
+            else -> 2
+        }
         TabRow(
-            selectedTabIndex = if (activeSubTab == "npcs") 0 else 1,
+            selectedTabIndex = subTabIndex,
             modifier = Modifier.padding(bottom = 16.dp)
         ) {
             Tab(
                 selected = activeSubTab == "npcs",
                 onClick = { activeSubTab = "npcs" },
-                text = { Text("Custom NPCs (${npcs.size})") }
+                text = { Text("NPCs (${npcs.size})") }
             )
             Tab(
                 selected = activeSubTab == "agents",
                 onClick = { activeSubTab = "agents" },
-                text = { Text("Apt Agents (${agents.size})") }
+                text = { Text("Agents (${agents.size})") }
+            )
+            Tab(
+                selected = activeSubTab == "tools_mcp",
+                onClick = { activeSubTab = "tools_mcp" },
+                text = { Text("Tools&MCP (${mcpTools.size})") }
             )
         }
 
-        if (activeSubTab == "npcs") {
-            // NPC List UI Grid
-            Box(modifier = Modifier.weight(1f)) {
-                if (npcs.isEmpty()) {
-                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Icon(Icons.Default.Contacts, contentDescription = null, modifier = Modifier.size(64.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f))
-                            Spacer(modifier = Modifier.height(8.dp))
-                            Text("尚未建立任何自定义NPC人设", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        val currentDateStr = remember {
+            java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.getDefault()).format(java.util.Date())
+        }
+
+        when (activeSubTab) {
+            "npcs" -> {
+                // NPC List UI Grid
+                Box(modifier = Modifier.weight(1f)) {
+                    if (npcs.isEmpty()) {
+                        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Icon(Icons.Default.Contacts, contentDescription = null, modifier = Modifier.size(64.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f))
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Text("尚未建立任何自定义NPC人设", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
+                    } else {
+                        LazyVerticalGridInside(
+                            items = npcs,
+                            modifier = Modifier.fillMaxSize()
+                        ) { npcItem ->
+                            NpcConfigCard(
+                                npc = npcItem,
+                                onEdit = { editingNpc = npcItem },
+                                onDelete = { viewModel.removeNpc(npcItem.id) },
+                                onStartChat = {
+                                    viewModel.createNewSession("${npcItem.name}-${currentDateStr}", "NPC", npcItem.id)
+                                    onNavigateToTab("chat")
+                                }
+                            )
                         }
                     }
-                } else {
-                    LazyVerticalGridInside(
-                        items = npcs,
-                        modifier = Modifier.fillMaxSize()
-                    ) { npcItem ->
-                        NpcConfigCard(
-                            npc = npcItem,
-                            onEdit = { editingNpc = npcItem },
-                            onDelete = { viewModel.removeNpc(npcItem.id) },
-                            onStartChat = {
-                                viewModel.createNewSession("聊：Npc ${npcItem.name}", "NPC", npcItem.id)
-                            }
-                        )
-                    }
-                }
 
-                FloatingActionButton(
-                    onClick = { showCreateNpcDialog = true },
-                    modifier = Modifier
-                        .align(Alignment.BottomEnd)
-                        .padding(16.dp)
-                ) {
-                    Icon(Icons.Default.Add, contentDescription = "新增")
+                    FloatingActionButton(
+                        onClick = { showCreateNpcDialog = true },
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .padding(16.dp)
+                    ) {
+                        Icon(Icons.Default.Add, contentDescription = "新增")
+                    }
                 }
             }
-        } else {
-            // Agent workspace list
-            Box(modifier = Modifier.weight(1f)) {
-                if (agents.isEmpty()) {
-                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Icon(Icons.Default.Architecture, contentDescription = null, modifier = Modifier.size(64.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f))
-                            Spacer(modifier = Modifier.height(8.dp))
-                            Text("尚无 Agent 设定规范，请点击右下角自动装配", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            "agents" -> {
+                // Agent workspace list
+                Box(modifier = Modifier.weight(1f)) {
+                    if (agents.isEmpty()) {
+                        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Icon(Icons.Default.Architecture, contentDescription = null, modifier = Modifier.size(64.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f))
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Text("尚无 Agent 设定规范，请点击右下角自动装配", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
+                    } else {
+                        LazyVerticalGridInside(
+                            items = agents,
+                            modifier = Modifier.fillMaxSize()
+                        ) { agentItem ->
+                            AgentConfigCard(
+                                agent = agentItem,
+                                onEdit = { editingAgent = agentItem },
+                                onDelete = { viewModel.removeAgent(agentItem.id) },
+                                onStartChat = {
+                                    viewModel.createNewSession("${agentItem.name}-${currentDateStr}", "AGENT", agentItem.id)
+                                    onNavigateToTab("chat")
+                                }
+                            )
                         }
                     }
-                } else {
-                    LazyVerticalGridInside(
-                        items = agents,
-                        modifier = Modifier.fillMaxSize()
-                    ) { agentItem ->
-                        AgentConfigCard(
-                            agent = agentItem,
-                            onEdit = { editingAgent = agentItem },
-                            onDelete = { viewModel.removeAgent(agentItem.id) },
-                            onStartChat = {
-                                viewModel.createNewSession("跑：Agent ${agentItem.name}", "AGENT", agentItem.id)
-                            }
-                        )
+
+                    FloatingActionButton(
+                        onClick = { showCreateAgentDialog = true },
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .padding(16.dp)
+                    ) {
+                        Icon(Icons.Default.NoteAdd, contentDescription = "配置系统规格文档")
                     }
                 }
+            }
+            else -> {
+                // Tools & MCP list UI Grid
+                Box(modifier = Modifier.weight(1f)) {
+                    if (mcpTools.isEmpty()) {
+                        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Icon(Icons.Default.Build, contentDescription = null, modifier = Modifier.size(64.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f))
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Text("此处可以自主编辑并维护仿真工具 (Simulated Tools/MCP JSON)...", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
+                    } else {
+                        LazyVerticalGridInside(
+                            items = mcpTools,
+                            modifier = Modifier.fillMaxSize()
+                        ) { toolItem ->
+                            McpToolCard(
+                                tool = toolItem,
+                                onEdit = { editingTool = toolItem },
+                                onDelete = { viewModel.removeMcpTool(toolItem.id) }
+                            )
+                        }
+                    }
 
-                FloatingActionButton(
-                    onClick = { showCreateAgentDialog = true },
-                    modifier = Modifier
-                        .align(Alignment.BottomEnd)
-                        .padding(16.dp)
-                ) {
-                    Icon(Icons.Default.NoteAdd, contentDescription = "配置系统规格文档")
+                    FloatingActionButton(
+                        onClick = { showCreateToolDialog = true },
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .padding(16.dp)
+                    ) {
+                        Icon(Icons.Default.Add, contentDescription = "新增工具")
+                    }
                 }
             }
         }
@@ -1738,7 +1845,7 @@ fun PersonaManagementScreen(viewModel: MainViewModel) {
                     OutlinedTextField(
                         value = promptText,
                         onValueChange = { promptText = it },
-                        label = { Text("全息 System Prompt (行动纲领)") },
+                        label = { Text("System Prompt (行动纲领)") },
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(150.dp)
@@ -1846,16 +1953,18 @@ fun PersonaManagementScreen(viewModel: MainViewModel) {
                 var fMemory by remember(originalAgent) { mutableStateOf(originalAgent?.memoryMd ?: DEFAULT_MEMORY_MD) }
                 var fSoul by remember(originalAgent) { mutableStateOf(originalAgent?.soulMd ?: DEFAULT_SOUL_MD) }
                 var fUser by remember(originalAgent) { mutableStateOf(originalAgent?.userMd ?: DEFAULT_USER_MD) }
-                var fTools by remember(originalAgent) {
-                    mutableStateOf(
-                        originalAgent?.toolsJson ?: """[
-  {
-    "name": "get_weather",
-    "description": "Query meteorological dynamics for an indicated location.",
-    "parametersJson": "{\"type\":\"object\"}"
-  }
-]"""
-                    )
+                var selectedToolNames by remember(originalAgent, mcpTools) {
+                    val namesSet = mutableSetOf<String>()
+                    val tJson = originalAgent?.toolsJson ?: ""
+                    if (tJson.isNotBlank() && tJson != "[]") {
+                        val regex = "\"name\"\\s*:\\s*\"([^\"]+)\"".toRegex()
+                        regex.findAll(tJson).forEach { match ->
+                            namesSet.add(match.groupValues[1])
+                        }
+                    } else if (originalAgent == null) {
+                        mcpTools.forEach { namesSet.add(it.name) }
+                    }
+                    mutableStateOf(namesSet)
                 }
 
                 var colorIndexSelected by remember(originalAgent) { mutableStateOf(originalAgent?.avatarColorOrdinal ?: 3) }
@@ -1866,7 +1975,7 @@ fun PersonaManagementScreen(viewModel: MainViewModel) {
                         .verticalScroll(rememberScrollState())
                 ) {
                     Text(
-                        if (activeAgentEditMode) "编辑微型 Agent 规格" else "装配超级 Agent 实体 (Markdown 矩阵)",
+                        if (activeAgentEditMode) "编辑Agent" else "装配超级 Agent 实体 (Markdown 矩阵)",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.primary,
@@ -1898,7 +2007,7 @@ fun PersonaManagementScreen(viewModel: MainViewModel) {
                         Tab(selected = activeEditorTab == "memory", onClick = { activeEditorTab = "memory" }, text = { Text("Memory.md") })
                         Tab(selected = activeEditorTab == "soul", onClick = { activeEditorTab = "soul" }, text = { Text("Soul.md") })
                         Tab(selected = activeEditorTab == "user", onClick = { activeEditorTab = "user" }, text = { Text("User.md") })
-                        Tab(selected = activeEditorTab == "tools", onClick = { activeEditorTab = "tools" }, text = { Text("Tools.json") })
+                        Tab(selected = activeEditorTab == "tools", onClick = { activeEditorTab = "tools" }, text = { Text("Tools") })
                     }
 
                     // Edit body area
@@ -1949,13 +2058,67 @@ fun PersonaManagementScreen(viewModel: MainViewModel) {
                             )
                         }
                         "tools" -> {
-                            OutlinedTextField(
-                                value = fTools,
-                                onValueChange = { fTools = it },
-                                label = { Text("自定义工具 JSON 格式") },
-                                modifier = Modifier.fillMaxWidth().height(160.dp),
-                                maxLines = 15
-                            )
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .heightIn(max = 240.dp)
+                                    .verticalScroll(rememberScrollState())
+                            ) {
+                                Text(
+                                    text = "勾选需要集成的仿真工具 (Simulated Tools):",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.padding(bottom = 8.dp)
+                                )
+                                if (mcpTools.isEmpty()) {
+                                    Text(
+                                        text = "⚠️ 尚无已配工具，请前往 [角色工坊 -> Tools&MCP] 菜单创建工具！",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.error,
+                                        modifier = Modifier.padding(vertical = 8.dp)
+                                    )
+                                } else {
+                                    mcpTools.forEach { mcpTool ->
+                                        val isChecked = mcpTool.name in selectedToolNames
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .clickable {
+                                                    val updated = selectedToolNames.toMutableSet()
+                                                    if (isChecked) updated.remove(mcpTool.name)
+                                                    else updated.add(mcpTool.name)
+                                                    selectedToolNames = updated
+                                                }
+                                                .padding(vertical = 6.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Checkbox(
+                                                checked = isChecked,
+                                                onCheckedChange = { checked ->
+                                                    val updated = selectedToolNames.toMutableSet()
+                                                    if (checked == false) updated.remove(mcpTool.name)
+                                                    else updated.add(mcpTool.name)
+                                                    selectedToolNames = updated
+                                                }
+                                            )
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Column {
+                                                Text(
+                                                    text = mcpTool.name,
+                                                    style = MaterialTheme.typography.bodyMedium,
+                                                    fontWeight = FontWeight.SemiBold
+                                                )
+                                                Text(
+                                                    text = "可用模拟工具",
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                            }
+                                        }
+                                        HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.08f))
+                                    }
+                                }
+                            }
                         }
                     }
 
@@ -2004,6 +2167,9 @@ fun PersonaManagementScreen(viewModel: MainViewModel) {
                         Button(
                             onClick = {
                                 if (agentName.isNotBlank()) {
+                                    val checkedMcpObjects = mcpTools.filter { it.name in selectedToolNames }
+                                    val computedToolsJson = "[" + checkedMcpObjects.map { it.jsonContent }.joinToString(",\n") + "]"
+
                                     if (activeAgentEditMode && originalAgent != null) {
                                         viewModel.saveAgent(
                                             originalAgent.copy(
@@ -2013,7 +2179,7 @@ fun PersonaManagementScreen(viewModel: MainViewModel) {
                                                 memoryMd = fMemory,
                                                 soulMd = fSoul,
                                                 userMd = fUser,
-                                                toolsJson = fTools,
+                                                toolsJson = computedToolsJson,
                                                 avatarColorOrdinal = colorIndexSelected
                                             )
                                         )
@@ -2027,7 +2193,7 @@ fun PersonaManagementScreen(viewModel: MainViewModel) {
                                                 memoryMd = fMemory,
                                                 soulMd = fSoul,
                                                 userMd = fUser,
-                                                toolsJson = fTools,
+                                                toolsJson = computedToolsJson,
                                                 avatarColorOrdinal = colorIndexSelected
                                             )
                                         )
@@ -2040,6 +2206,190 @@ fun PersonaManagementScreen(viewModel: MainViewModel) {
                         }
                     }
                 }
+            }
+        }
+    }
+
+    val activeToolEditMode = editingTool != null
+    if (showCreateToolDialog || activeToolEditMode) {
+        Dialog(onDismissRequest = {
+            showCreateToolDialog = false
+            editingTool = null
+        }) {
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                tonalElevation = 8.dp,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(12.dp)
+            ) {
+                val originalTool = editingTool
+                var toolName by remember(originalTool) { mutableStateOf(originalTool?.name ?: "") }
+                var toolJsonContent by remember(originalTool) {
+                    mutableStateOf(
+                        originalTool?.jsonContent ?: """{
+  "name": "get_example",
+  "description": "An example custom tool",
+  "parametersJson": "{\"type\":\"object\",\"properties\":{\"arg1\":{\"type\":\"string\"}}}"
+}"""
+                    )
+                }
+
+                Column(
+                    modifier = Modifier
+                        .padding(16.dp)
+                        .verticalScroll(rememberScrollState())
+                ) {
+                    Text(
+                        text = if (activeToolEditMode) "编辑模拟工具" else "自定义模拟工具",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.padding(bottom = 12.dp)
+                    )
+
+                    OutlinedTextField(
+                        value = toolName,
+                        onValueChange = { toolName = it },
+                        label = { Text("工具标志符 (e.g. get_weather)") },
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
+                        singleLine = true
+                    )
+
+                    OutlinedTextField(
+                        value = toolJsonContent,
+                        onValueChange = { toolJsonContent = it },
+                        label = { Text("工具 JSON 定义") },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(240.dp),
+                        maxLines = 20
+                    )
+
+                    Spacer(modifier = Modifier.height(14.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End
+                    ) {
+                        TextButton(onClick = {
+                            showCreateToolDialog = false
+                            editingTool = null
+                        }) {
+                            Text("放弃")
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Button(
+                            onClick = {
+                                if (toolName.isNotBlank() && toolJsonContent.isNotBlank()) {
+                                    if (activeToolEditMode && originalTool != null) {
+                                        viewModel.saveMcpTool(
+                                            originalTool.copy(
+                                                name = toolName,
+                                                jsonContent = toolJsonContent
+                                            )
+                                        )
+                                        editingTool = null
+                                    } else {
+                                        viewModel.saveMcpTool(
+                                            McpTool(
+                                                name = toolName,
+                                                jsonContent = toolJsonContent
+                                            )
+                                        )
+                                        showCreateToolDialog = false
+                                    }
+                                }
+                            }
+                        ) {
+                            Text(if (activeToolEditMode) "确认更新" else "写入注册")
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun McpToolCard(
+    tool: McpTool,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.12f)),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    modifier = Modifier
+                        .size(40.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.secondary),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        Icons.Default.Build,
+                        contentDescription = null,
+                        tint = Color.White,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+
+                Spacer(modifier = Modifier.width(12.dp))
+
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        tool.name,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        "Custom simulated MCP Tool",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
+                IconButton(onClick = onEdit) {
+                    Icon(
+                        Icons.Default.Edit,
+                        contentDescription = "编辑",
+                        tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.8f)
+                    )
+                }
+
+                IconButton(onClick = onDelete) {
+                    Icon(
+                        Icons.Default.Delete,
+                        contentDescription = "删除",
+                        tint = MaterialTheme.colorScheme.error.copy(alpha = 0.8f)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // Show JSON preview
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+                shape = RoundedCornerShape(8.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(
+                    text = tool.jsonContent,
+                    style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(10.dp)
+                        .heightIn(max = 100.dp)
+                        .verticalScroll(rememberScrollState()),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
         }
     }
@@ -2152,7 +2502,7 @@ fun NpcConfigCard(
             ) {
                 Icon(Icons.Default.Forum, contentDescription = null, modifier = Modifier.size(16.dp))
                 Spacer(modifier = Modifier.width(6.dp))
-                Text("以此NPC身份开启新聊天")
+                Text("召唤Ta开启新聊天")
             }
         }
     }
@@ -2191,30 +2541,52 @@ fun AgentConfigCard(
                 Spacer(modifier = Modifier.width(12.dp))
 
                 Column(modifier = Modifier.weight(1f)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            agent.name,
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        agent.name,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                    
+                    val activatedToolsCount = remember(agent.toolsJson) {
+                        if (agent.toolsJson.isBlank()) 0
+                        else {
+                            val regex = "\"name\"\\s*:".toRegex()
+                            regex.findAll(agent.toolsJson).count()
+                        }
+                    }
+
+                    val activeMdCount = remember(agent) {
+                        listOf(agent.agentMd, agent.identityMd, agent.memoryMd, agent.soulMd, agent.userMd).count { it.isNotBlank() }
+                    }
+
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
                         Box(
                             modifier = Modifier
                                 .background(MaterialTheme.colorScheme.primaryContainer, RoundedCornerShape(4.dp))
                                 .padding(horizontal = 4.dp, vertical = 2.dp)
                         ) {
                             Text(
-                                "5 md files active",
+                                "${activeMdCount} md files activated",
                                 style = androidx.compose.ui.text.TextStyle(fontSize = 10.sp, fontWeight = FontWeight.Bold),
                                 color = MaterialTheme.colorScheme.onPrimaryContainer
                             )
                         }
+                        Box(
+                            modifier = Modifier
+                                .background(MaterialTheme.colorScheme.secondaryContainer, RoundedCornerShape(4.dp))
+                                .padding(horizontal = 4.dp, vertical = 2.dp)
+                        ) {
+                            Text(
+                                "${activatedToolsCount} tools activated",
+                                style = androidx.compose.ui.text.TextStyle(fontSize = 10.sp, fontWeight = FontWeight.Bold),
+                                color = MaterialTheme.colorScheme.onSecondaryContainer
+                            )
+                        }
                     }
-                    Text(
-                        "集成了自定义工具调用的底层配置...",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
                 }
 
                 IconButton(onClick = onEdit) {
@@ -2234,22 +2606,6 @@ fun AgentConfigCard(
                 }
             }
 
-            Spacer(modifier = Modifier.height(8.dp))
-
-            // Show custom files labels
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                listOf("Agent.md", "Identity.md", "Memory.md", "Soul.md", "User.md").forEach { lab ->
-                    AssistChip(
-                        onClick = {},
-                        label = { Text(lab, fontSize = 10.sp) },
-                        modifier = Modifier.height(24.dp)
-                    )
-                }
-            }
-
             Spacer(modifier = Modifier.height(10.dp))
 
             Button(
@@ -2259,7 +2615,7 @@ fun AgentConfigCard(
             ) {
                 Icon(Icons.Default.PlayCircleFilled, contentDescription = null, modifier = Modifier.size(16.dp))
                 Spacer(modifier = Modifier.width(6.dp))
-                Text("启动该 Agent 双向沙盒")
+                Text("召唤Ta开启新会话")
             }
         }
     }
@@ -2273,6 +2629,7 @@ fun SettingsScreen(viewModel: MainViewModel) {
     val activeSettings = settings ?: AppSettings()
     val isTesting by viewModel.isTestingConnection.collectAsStateWithLifecycle()
     val modelsList by viewModel.modelsList.collectAsStateWithLifecycle()
+    val testResultMessage by viewModel.testResultMessage.collectAsStateWithLifecycle()
     val allMessagesHistory by viewModel.allSessionsFlow.collectAsStateWithLifecycle(initialValue = emptyList())
 
     // Internal edits
@@ -2292,7 +2649,7 @@ fun SettingsScreen(viewModel: MainViewModel) {
             .verticalScroll(rememberScrollState())
     ) {
         Text(
-            "设置与基准性能仪表盘",
+            "设置",
             style = MaterialTheme.typography.titleLarge,
             fontWeight = FontWeight.Bold,
             color = MaterialTheme.colorScheme.primary,
@@ -2357,11 +2714,44 @@ fun SettingsScreen(viewModel: MainViewModel) {
                     if (isTesting) {
                         CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text("连接测试并拉取模型中...")
+                        Text("连通性测试中...")
                     } else {
                         Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text("测试连接并强制获取模型列表 (/v1/models)")
+                        Text("连通性测试")
+                    }
+                }
+
+                testResultMessage?.let { msg ->
+                    Spacer(modifier = Modifier.height(8.dp))
+                    val isSuccess = msg.startsWith("SUCCESS:")
+                    val displayMsg = msg.substringAfter(":")
+                    Card(
+                        colors = CardDefaults.cardColors(
+                            containerColor = if (isSuccess) Color(0xFFE8F5E9) else Color(0xFFFFEBEE)
+                        ),
+                        border = BorderStroke(1.dp, if (isSuccess) Color(0xFFC8E6C9) else Color(0xFFFFCDD2)),
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = if (isSuccess) Icons.Default.CheckCircle else Icons.Default.Error,
+                                contentDescription = null,
+                                tint = if (isSuccess) Color(0xFF2E7D32) else Color(0xFFC62828),
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = displayMsg,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (isSuccess) Color(0xFF2E7D32) else Color(0xFFC62828),
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
                     }
                 }
 
@@ -2401,12 +2791,29 @@ fun SettingsScreen(viewModel: MainViewModel) {
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("温度 (Temperature): ${String.format("%.2f", activeSettings.temperature)}", style = MaterialTheme.typography.bodyMedium)
+                    Text("Temperature: ${String.format("%.2f", activeSettings.temperature)}", style = MaterialTheme.typography.bodyMedium)
                 }
                 Slider(
                     value = activeSettings.temperature,
-                    onValueChange = { viewModel.updateHyperparams(it, activeSettings.maxTokens) },
+                    onValueChange = { viewModel.updateHyperparams(it, activeSettings.maxTokens, activeSettings.topP) },
                     valueRange = 0.0f..1.5f,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                // Top P
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Top P: ${String.format("%.2f", activeSettings.topP)}", style = MaterialTheme.typography.bodyMedium)
+                }
+                Slider(
+                    value = activeSettings.topP,
+                    onValueChange = { viewModel.updateHyperparams(activeSettings.temperature, activeSettings.maxTokens, it) },
+                    valueRange = 0.0f..1.0f,
                     modifier = Modifier.fillMaxWidth()
                 )
 
@@ -2418,13 +2825,12 @@ fun SettingsScreen(viewModel: MainViewModel) {
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("单次最大输出代币限制 (Max Tokens): ${activeSettings.maxTokens}", style = MaterialTheme.typography.bodyMedium)
+                    Text("Max Tokens: ${activeSettings.maxTokens}", style = MaterialTheme.typography.bodyMedium)
                 }
                 Slider(
                     value = activeSettings.maxTokens.toFloat(),
-                    onValueChange = { viewModel.updateHyperparams(activeSettings.temperature, it.toInt()) },
+                    onValueChange = { viewModel.updateHyperparams(activeSettings.temperature, it.toInt(), activeSettings.topP) },
                     valueRange = 256.0f..4096.0f,
-                    steps = 15,
                     modifier = Modifier.fillMaxWidth()
                 )
             }
@@ -2441,7 +2847,7 @@ fun SettingsScreen(viewModel: MainViewModel) {
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
                 Text(
-                    "风格美学与主题配置",
+                    "主题",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.primary,
@@ -2449,7 +2855,7 @@ fun SettingsScreen(viewModel: MainViewModel) {
                 )
 
                 // Light / Dark modes options
-                Text("主题色彩模式:", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold)
+                Text("夜间模式:", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold)
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -2466,7 +2872,7 @@ fun SettingsScreen(viewModel: MainViewModel) {
                 Spacer(modifier = Modifier.height(10.dp))
 
                 // Color Themes selector
-                Text("精美美化皮肤色调:", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold)
+                Text("主色调:", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold)
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -2493,7 +2899,7 @@ fun SettingsScreen(viewModel: MainViewModel) {
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
                 Text(
-                    "沙盒延迟及大模吞吐极速基准",
+                    "Benchmark",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.primary,

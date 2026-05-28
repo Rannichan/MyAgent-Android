@@ -13,6 +13,7 @@ data class ChatCompletionRequest(
     val model: String,
     val messages: List<NetworkMessage>,
     val temperature: Float,
+    val top_p: Float? = null,
     val max_tokens: Int?,
     val stream: Boolean
 )

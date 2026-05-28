@@ -51,6 +51,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val allNpcsFlow = repository.allNpcsFlow
     val allAgentsFlow = repository.allAgentsFlow
     val allSessionsFlow = repository.allSessionsFlow
+    val allMcpToolsFlow = repository.allMcpToolsFlow
 
     private val _currentSessionId = MutableStateFlow<Long?>(null)
     val currentSessionId: StateFlow<Long?> = _currentSessionId.asStateFlow()
@@ -86,6 +87,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _isTestingConnection = MutableStateFlow(false)
     val isTestingConnection: StateFlow<Boolean> = _isTestingConnection.asStateFlow()
+
+    private val _testResultMessage = MutableStateFlow<String?>(null)
+    val testResultMessage: StateFlow<String?> = _testResultMessage.asStateFlow()
+
+    private val _isApiConnected = MutableStateFlow(false)
+    val isApiConnected: StateFlow<Boolean> = _isApiConnected.asStateFlow()
 
     private val _isNavigationBarVisible = MutableStateFlow(true)
     val isNavigationBarVisible: StateFlow<Boolean> = _isNavigationBarVisible.asStateFlow()
@@ -157,6 +164,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 )
             )
         }
+
+        val tools = repository.mcpToolDao.getAllMcpToolsFlow().firstOrNull() ?: emptyList()
+        if (tools.isEmpty()) {
+            repository.insertMcpTool(
+                McpTool(
+                    name = "get_server_status",
+                    jsonContent = """{"name": "get_server_status", "description": "Fetches status of connected distributed cloud servers.", "parametersJson": "{\"type\":\"object\",\"properties\":{\"clusterId\":{\"type\":\"string\"}}}"}"""
+                )
+            )
+            repository.insertMcpTool(
+                McpTool(
+                    name = "execute_query",
+                    jsonContent = """{"name": "execute_query", "description": "Executes localized read-only diagnostics SQL index.", "parametersJson": "{\"type\":\"object\",\"properties\":{\"sql\":{\"type\":\"string\"}}}"}"""
+                )
+            )
+        }
     }
 
     fun selectSession(sessionId: Long?) {
@@ -168,6 +191,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             val s = repository.getSettings()
             repository.updateSettings(s.copy(baseUrl = url))
+            fetchAvailableModels()
         }
     }
 
@@ -175,6 +199,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             val s = repository.getSettings()
             repository.updateSettings(s.copy(apiKey = key))
+            fetchAvailableModels()
         }
     }
 
@@ -192,10 +217,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun updateHyperparams(temp: Float, tokens: Int) {
+    fun updateHyperparams(temp: Float, tokens: Int, topP: Float) {
         viewModelScope.launch {
             val s = repository.getSettings()
-            repository.updateSettings(s.copy(temperature = temp, maxTokens = tokens))
+            repository.updateSettings(s.copy(temperature = temp, maxTokens = tokens, topP = topP))
         }
     }
 
@@ -213,14 +238,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun fetchAvailableModels() {
         viewModelScope.launch {
             _isTestingConnection.value = true
+            _testResultMessage.value = null
             val s = repository.getSettings()
             try {
-                val list = repository.fetchModelsFromEndpoint(s.baseUrl, s.apiKey)
-                if (list.isNotEmpty()) {
-                    _modelsList.value = list
+                val result = repository.fetchModelsFromEndpoint(s.baseUrl, s.apiKey)
+                _modelsList.value = result.idList
+                if (result.idList.isNotEmpty()) {
+                    _isApiConnected.value = true
+                    _testResultMessage.value = "SUCCESS:连接测试成功！已加载 ${result.idList.size} 个可用模型。\n\n【接口原始返回】:\n${result.rawResponse}"
+                } else {
+                    _isApiConnected.value = s.apiKey.isNotBlank()
+                    _testResultMessage.value = "SUCCESS:连接测试成功，但该接口返回的模型列表为空。\n\n【接口原始返回】:\n${result.rawResponse}"
                 }
             } catch (e: Exception) {
                 Log.e("MainViewModel", "Fetch models failed", e)
+                _isApiConnected.value = false
+                _testResultMessage.value = "ERROR:连接测试失败！\n\n【原始报错详情】:\n${e.localizedMessage ?: e.message ?: e.toString()}"
             } finally {
                 _isTestingConnection.value = false
             }
@@ -319,6 +352,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun removeAgent(id: Long) {
         viewModelScope.launch {
             repository.deleteAgent(id)
+        }
+    }
+
+    // Custom McpTools
+    fun saveMcpTool(tool: McpTool) {
+        viewModelScope.launch {
+            repository.insertMcpTool(tool)
+        }
+    }
+
+    fun removeMcpTool(id: Long) {
+        viewModelScope.launch {
+            repository.deleteMcpTool(id)
         }
     }
 
@@ -461,6 +507,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 model = settings.defaultModel,
                 messages = networkMessages,
                 temperature = settings.temperature,
+                top_p = settings.topP,
                 max_tokens = if (settings.maxTokens > 0) settings.maxTokens else null,
                 stream = settings.isStreaming
             )

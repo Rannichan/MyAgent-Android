@@ -12,6 +12,7 @@ data class AppSettings(
     val themeMode: String = "system", // system, light, dark
     val themeColor: String = "violet", // violet, blue, green, amber
     val temperature: Float = 0.7f,
+    val topP: Float = 0.9f,
     val maxTokens: Int = 2048,
     val isStreaming: Boolean = true,
     val isThinkingModeEnabled: Boolean = true,
@@ -67,3 +68,12 @@ data class ChatMessage(
     val tokensPerSec: Double = 0.0,
     val modelUsed: String = ""
 )
+
+@Entity(tableName = "mcp_tools")
+data class McpTool(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val name: String,
+    val jsonContent: String,
+    val createdAt: Long = System.currentTimeMillis()
+)
+

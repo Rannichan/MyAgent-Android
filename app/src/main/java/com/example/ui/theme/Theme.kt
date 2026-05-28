@@ -23,7 +23,20 @@ private val VioletDark = darkColorScheme(
     outline = VioletOutlineDark
 )
 
-private val VioletLight = VioletDark // Keep "Elegant Dark" layout as persistent theme for default Violet color scheme
+private val VioletLight = lightColorScheme(
+    primary = VioletPrimary,
+    onPrimary = Color.White,
+    primaryContainer = VioletPrimaryContainer,
+    onPrimaryContainer = Color(0xFF6200EE),
+    secondary = VioletSecondary,
+    background = VioletBackgroundLight,
+    onBackground = Color(0xFF1C1B1F),
+    surface = VioletSurfaceLight,
+    onSurface = Color(0xFF1C1B1F),
+    surfaceVariant = VioletBackgroundLight,
+    onSurfaceVariant = Color(0xFF49454F),
+    outline = Color(0xFF79747E)
+)
 
 private val BlueLight = lightColorScheme(
     primary = BluePrimary,
