@@ -27,6 +27,7 @@ data class NpcCharacter(
     val prompt: String,
     val greeting: String,
     val avatarColorOrdinal: Int = 0, // index for color
+    val avatarUri: String? = null,
     val createdAt: Long = System.currentTimeMillis()
 )
 
@@ -41,6 +42,7 @@ data class AgentConfig(
     val userMd: String = "",
     val toolsJson: String = "[]", // JSON representation of list of custom tools
     val avatarColorOrdinal: Int = 1, // index for color
+    val avatarUri: String? = null,
     val createdAt: Long = System.currentTimeMillis()
 )
 
@@ -67,7 +69,9 @@ data class ChatMessage(
     val completionTokens: Int = 0,
     val totalTokens: Int = 0,
     val tokensPerSec: Double = 0.0,
-    val modelUsed: String = ""
+    val modelUsed: String = "",
+    val rawRequestBody: String? = null,
+    val rawResponseBody: String? = null
 )
 
 @Entity(tableName = "mcp_tools")
@@ -77,4 +81,3 @@ data class McpTool(
     val jsonContent: String,
     val createdAt: Long = System.currentTimeMillis()
 )
-

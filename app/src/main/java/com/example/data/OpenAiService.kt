@@ -16,6 +16,7 @@ import java.io.IOException
 import java.util.concurrent.TimeUnit
 
 sealed class ChatStreamChunk {
+    data class RawResponse(val text: String) : ChatStreamChunk()
     data class Content(val text: String) : ChatStreamChunk()
     data class Thinking(val text: String) : ChatStreamChunk()
     data class ToolCall(val name: String, val argJson: String) : ChatStreamChunk()
@@ -46,6 +47,10 @@ class OpenAiService {
 
     private fun cleanUrl(url: String): String {
         return if (url.trim().endsWith("/")) url.trim() else "${url.trim()}/"
+    }
+
+    fun serializeChatCompletionRequest(request: ChatCompletionRequest): String {
+        return requestAdapter.toJson(request)
     }
 
     suspend fun testConnectionAndGetModels(baseUrl: String, apiKey: String): ModelFetchResult {
@@ -83,7 +88,7 @@ class OpenAiService {
         request: ChatCompletionRequest
     ): Flow<ChatStreamChunk> = flow {
         val url = cleanUrl(baseUrl) + "chat/completions"
-        val jsonPayload = requestAdapter.toJson(request)
+        val jsonPayload = serializeChatCompletionRequest(request)
         
         val requestBody = jsonPayload.toRequestBody("application/json".toMediaType())
         val builder = Request.Builder()
@@ -100,6 +105,7 @@ class OpenAiService {
             val response = client.newCall(httpRequest).execute()
             if (!response.isSuccessful) {
                 val errBody = response.body?.string() ?: "Unknown error"
+                emit(ChatStreamChunk.RawResponse(errBody))
                 emit(ChatStreamChunk.Error("HTTP Error ${response.code}: $errBody"))
                 return@flow
             }
@@ -110,6 +116,7 @@ class OpenAiService {
             var line: String?
             while (reader.readLine().also { line = it } != null) {
                 val currentLine = line ?: break
+                emit(ChatStreamChunk.RawResponse(currentLine))
                 if (currentLine.startsWith("data:")) {
                     val data = currentLine.substring(5).trim()
                     if (data == "[DONE]") {
@@ -171,6 +178,7 @@ class OpenAiService {
                 }
             }
         } catch (e: Exception) {
+            emit(ChatStreamChunk.RawResponse("Execution error: ${e.localizedMessage ?: e.message}"))
             emit(ChatStreamChunk.Error("Execution error: ${e.localizedMessage ?: e.message}"))
         }
     }.flowOn(Dispatchers.IO)

@@ -190,6 +190,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val isApiConnected: StateFlow<Boolean> = _isApiConnected.asStateFlow()
 
     private var activeStreamingJob: Job? = null
+    private var currentRawRequestBody: String? = null
+    private val currentRawResponseBody = StringBuilder()
 
     init {
         // Initialize settings if they don't exist
@@ -543,6 +545,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val sessionId = _currentSessionId.value
         val partialContent = _currentStreamContent.value
         val partialThinking = _currentStreamThinking.value.takeIf { it.isNotBlank() }
+        val partialRawRequest = currentRawRequestBody
+        val partialRawResponse = currentRawResponseBody.toString().takeIf { it.isNotBlank() }
 
         activeStreamingJob?.cancel(CancellationException("Interrupted by user"))
         activeStreamingJob = null
@@ -560,11 +564,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         role = "assistant",
                         content = partialContent,
                         thinkingContent = partialThinking,
-                        modelUsed = settings.defaultModel
+                        modelUsed = settings.defaultModel,
+                        rawRequestBody = partialRawRequest,
+                        rawResponseBody = partialRawResponse
                     )
                 )
             }
         }
+
+        currentRawRequestBody = null
+        currentRawResponseBody.clear()
     }
 
     private fun supportsThinkingSwitchParam(model: String, baseUrl: String): Boolean {
@@ -639,6 +648,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     null
                 }
             )
+            val requestJson = repository.serializeChatCompletionRequest(req)
+            currentRawRequestBody = requestJson
+            currentRawResponseBody.clear()
 
             val startTime = System.currentTimeMillis()
             var firstTokenTime = 0L
@@ -656,6 +668,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 .collect { chunk ->
                     when (chunk) {
+                        is ChatStreamChunk.RawResponse -> {
+                            if (currentRawResponseBody.isNotEmpty()) {
+                                currentRawResponseBody.append('\n')
+                            }
+                            currentRawResponseBody.append(chunk.text)
+                        }
                         is ChatStreamChunk.Thinking -> {
                             if (settings.isThinkingModeEnabled) {
                                 if (firstTokenTime == 0L) {
@@ -722,6 +740,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val finalLatencyMs = System.currentTimeMillis() - startTime
             val textToSave = _currentStreamContent.value
             val thinkingToSave = _currentStreamThinking.value.takeIf { it.isNotBlank() }
+            val rawResponseToSave = currentRawResponseBody.toString().takeIf { it.isNotBlank() }
 
             val totalCharCount = textToSave.length + (thinkingToSave?.length ?: 0)
             val estimatedCompletionTokens = _tokenCountCompletion.value.takeIf { it > 0 } ?: (totalCharCount / 3.8).toInt().coerceAtLeast(1)
@@ -749,7 +768,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         completionTokens = estimatedCompletionTokens,
                         totalTokens = estimatedTotalTokens,
                         tokensPerSec = finalTokensPerSec,
-                        modelUsed = settings.defaultModel
+                        modelUsed = settings.defaultModel,
+                        rawRequestBody = requestJson,
+                        rawResponseBody = rawResponseToSave
                     )
                 )
             }
@@ -757,6 +778,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             _isStreamingActive.value = false
             _currentStreamContent.value = ""
             _currentStreamThinking.value = ""
+            currentRawRequestBody = null
+            currentRawResponseBody.clear()
         }
     }
 

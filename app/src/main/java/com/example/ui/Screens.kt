@@ -1,8 +1,14 @@
 package com.example.ui
 
+import android.content.Intent
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.text.selection.LocalTextSelectionColors
 import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.text.selection.TextSelectionColors
 import com.example.ui.theme.AgentHubTheme
 import androidx.activity.compose.BackHandler
 import androidx.compose.ui.graphics.graphicsLayer
@@ -28,12 +34,14 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
@@ -54,6 +62,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.core.content.FileProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import coil.compose.AsyncImage
 import com.example.data.*
 import kotlinx.coroutines.flow.sample
 import kotlinx.coroutines.launch
@@ -67,6 +76,52 @@ val AvatarColors = listOf(
     Color(0xFF00796B), // 4: Teal
     Color(0xFFC2185B), // 5: Rose
 )
+
+private data class AvatarUiModel(
+    val name: String,
+    val avatarColorOrdinal: Int,
+    val avatarUri: String?
+)
+
+private fun avatarInitial(name: String): String {
+    return name.trim().takeIf { it.isNotEmpty() }?.take(1)?.uppercase() ?: "?"
+}
+
+@Composable
+private fun EntityAvatar(
+    name: String,
+    avatarColorOrdinal: Int,
+    avatarUri: String?,
+    modifier: Modifier = Modifier,
+    textStyle: TextStyle? = null
+) {
+    val avatarColor = AvatarColors[avatarColorOrdinal.coerceIn(0, AvatarColors.lastIndex)]
+    val avatarModel = remember(avatarUri) { avatarUri?.takeIf { it.isNotBlank() }?.let(Uri::parse) }
+    val resolvedTextStyle = textStyle ?: MaterialTheme.typography.titleMedium
+
+    Box(
+        modifier = modifier
+            .clip(CircleShape)
+            .background(avatarColor),
+        contentAlignment = Alignment.Center
+    ) {
+        if (avatarModel != null) {
+            AsyncImage(
+                model = avatarModel,
+                contentDescription = name,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize()
+            )
+        } else {
+            Text(
+                text = avatarInitial(name),
+                style = resolvedTextStyle,
+                fontWeight = FontWeight.Bold,
+                color = Color.White
+            )
+        }
+    }
+}
 
 @OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
 @Composable
@@ -129,33 +184,34 @@ fun MainAppContainer(viewModel: MainViewModel) {
                 }
             }
         ) { innerPadding ->
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(
-                        top = if (currentTab == "chat") 0.dp else innerPadding.calculateTopPadding(),
-                        bottom = if (currentTab == "chat") 0.dp else innerPadding.calculateBottomPadding()
-                    )
-            ) {
-                AnimatedContent(
-                    targetState = currentTab,
-                    transitionSpec = {
-                        val tabOrder = mapOf("chat" to 0, "personas" to 1, "settings" to 2)
-                        val initialIndex = tabOrder[initialState] ?: 0
-                        val targetIndex = tabOrder[targetState] ?: 0
-                        val direction = if (targetIndex >= initialIndex) 1 else -1
+            AnimatedContent(
+                targetState = currentTab,
+                transitionSpec = {
+                    val tabOrder = mapOf("chat" to 0, "personas" to 1, "settings" to 2)
+                    val initialIndex = tabOrder[initialState] ?: 0
+                    val targetIndex = tabOrder[targetState] ?: 0
+                    val direction = if (targetIndex >= initialIndex) 1 else -1
 
-                        (slideInHorizontally(
-                            initialOffsetX = { fullWidth -> (fullWidth / 3) * direction },
-                            animationSpec = spring()
-                        ) + fadeIn(animationSpec = spring())) togetherWith
-                                (slideOutHorizontally(
-                                    targetOffsetX = { fullWidth -> (-fullWidth / 3) * direction },
-                                    animationSpec = spring()
-                                ) + fadeOut(animationSpec = spring()))
-                    },
-                    label = "TabTransition"
-                ) { targetTab ->
+                    slideInHorizontally(
+                        initialOffsetX = { fullWidth -> fullWidth * direction },
+                        animationSpec = spring()
+                    ) togetherWith
+                            slideOutHorizontally(
+                                targetOffsetX = { fullWidth -> -fullWidth * direction },
+                                animationSpec = spring()
+                            )
+                },
+                label = "TabTransition",
+                modifier = Modifier.fillMaxSize()
+            ) { targetTab ->
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(
+                            top = if (targetTab == "chat") 0.dp else innerPadding.calculateTopPadding(),
+                            bottom = if (targetTab == "chat") 0.dp else innerPadding.calculateBottomPadding()
+                        )
+                ) {
                     when (targetTab) {
                         "chat" -> ChatScreen(
                             viewModel = viewModel,
@@ -183,6 +239,8 @@ fun ChatScreen(
     val npcs by viewModel.allNpcsFlow.collectAsStateWithLifecycle(initialValue = emptyList())
     val agents by viewModel.allAgentsFlow.collectAsStateWithLifecycle(initialValue = emptyList())
     val isStreaming by viewModel.isStreamingActive.collectAsStateWithLifecycle()
+    val currentStreamContent by viewModel.currentStreamContent.collectAsStateWithLifecycle()
+    val currentStreamThinking by viewModel.currentStreamThinking.collectAsStateWithLifecycle()
 
     var searchQuery by remember { mutableStateOf("") }
     var isSearching by remember { mutableStateOf(false) }
@@ -241,38 +299,24 @@ fun ChatScreen(
                                 )
                             } else {
                                 Text(
-                                    "Agent Hub 对话",
-                                    style = MaterialTheme.typography.titleMedium,
+                                    "对话",
+                                    style = MaterialTheme.typography.titleLarge,
                                     fontWeight = FontWeight.Bold,
-                                    color = MaterialTheme.colorScheme.onSurface
+                                    color = MaterialTheme.colorScheme.primary
                                 )
                             }
                         },
-                        navigationIcon = {
-                            if (isSearching) {
+                        navigationIcon = if (isSearching) {
+                            {
                                 IconButton(onClick = {
                                     isSearching = false
                                     searchQuery = ""
                                 }) {
                                     Icon(Icons.Default.ArrowBack, contentDescription = "取消搜索")
                                 }
-                            } else {
-                                Box(
-                                    modifier = Modifier
-                                        .padding(12.dp)
-                                        .size(36.dp)
-                                        .clip(CircleShape)
-                                        .background(MaterialTheme.colorScheme.primaryContainer),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(
-                                        Icons.Default.SmartToy,
-                                        contentDescription = null,
-                                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                                        modifier = Modifier.size(20.dp)
-                                    )
-                                }
                             }
+                        } else {
+                            {}
                         },
                         actions = {
                             if (!isSearching) {
@@ -334,7 +378,18 @@ fun ChatScreen(
                             verticalArrangement = Arrangement.spacedBy(12.dp),
                             contentPadding = PaddingValues(top = 12.dp, bottom = bottomPadding + 20.dp)
                         ) {
-                            items(filteredSessions, key = { it.id }) { item ->
+                            items(filteredSessions, key = { it.id }, contentType = { "session" }) { item ->
+                                val avatar = remember(item, npcs, agents) {
+                                    when (item.mode) {
+                                        "NPC" -> npcs.find { it.id == item.associatedId }?.let {
+                                            AvatarUiModel(it.name, it.avatarColorOrdinal, it.avatarUri)
+                                        }
+                                        "AGENT" -> agents.find { it.id == item.associatedId }?.let {
+                                            AvatarUiModel(it.name, it.avatarColorOrdinal, it.avatarUri)
+                                        }
+                                        else -> null
+                                    } ?: AvatarUiModel(item.title, 1, null)
+                                }
                                 val badgeColor = when (item.mode) {
                                     "NPC" -> Color(0xFF6200EE)
                                     "AGENT" -> Color(0xFF00796B)
@@ -358,11 +413,12 @@ fun ChatScreen(
                                         modifier = Modifier.padding(horizontal = 18.dp, vertical = 16.dp),
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
-                                        Box(
-                                            modifier = Modifier
-                                                .size(10.dp)
-                                                .clip(CircleShape)
-                                                .background(badgeColor)
+                                        EntityAvatar(
+                                            name = avatar.name,
+                                            avatarColorOrdinal = avatar.avatarColorOrdinal,
+                                            avatarUri = avatar.avatarUri,
+                                            modifier = Modifier.size(44.dp),
+                                            textStyle = MaterialTheme.typography.titleSmall
                                         )
 
                                         Spacer(modifier = Modifier.width(12.dp))
@@ -427,7 +483,18 @@ fun ChatScreen(
                     else -> activeSession.title
                 }
             } else {
-                "Agent Hub 对话"
+                "对话"
+            }
+            val sessionAvatar = remember(activeSession, npcs, agents, displayTitle) {
+                when (activeSession?.mode) {
+                    "NPC" -> npcs.find { it.id == activeSession.associatedId }?.let {
+                        AvatarUiModel(it.name, it.avatarColorOrdinal, it.avatarUri)
+                    }
+                    "AGENT" -> agents.find { it.id == activeSession.associatedId }?.let {
+                        AvatarUiModel(it.name, it.avatarColorOrdinal, it.avatarUri)
+                    }
+                    else -> null
+                } ?: AvatarUiModel(displayTitle, 1, null)
             }
             val settingsItem by viewModel.settingsFlow.collectAsStateWithLifecycle(initialValue = AppSettings())
             val isApiConnected by viewModel.isApiConnected.collectAsStateWithLifecycle()
@@ -511,20 +578,13 @@ fun ChatScreen(
                                 Icon(Icons.Default.ArrowBack, contentDescription = "返回列表")
                             }
                             Spacer(modifier = Modifier.width(4.dp))
-                            Box(
-                                modifier = Modifier
-                                    .size(36.dp)
-                                    .clip(CircleShape)
-                                    .background(MaterialTheme.colorScheme.primaryContainer),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(
-                                    Icons.Default.SmartToy,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                                    modifier = Modifier.size(20.dp)
-                                )
-                            }
+                            EntityAvatar(
+                                name = sessionAvatar.name,
+                                avatarColorOrdinal = sessionAvatar.avatarColorOrdinal,
+                                avatarUri = sessionAvatar.avatarUri,
+                                modifier = Modifier.size(36.dp),
+                                textStyle = MaterialTheme.typography.bodyMedium
+                            )
                         }
                     },
                     actions = {
@@ -571,6 +631,7 @@ fun ChatScreen(
                     val density = LocalDensity.current
                     val keyboardBottomPadding = with(density) { WindowInsets.ime.getBottom(density).toDp() }
                     val listState = rememberLazyListState()
+                    val coroutineScope = rememberCoroutineScope()
                     var lastAutoScrolledSessionId by remember { mutableStateOf<Long?>(null) }
                     var collapseThinkingSignal by remember { mutableStateOf(0) }
                     var lastHandledUserMessageId by remember(currentSessionId) { mutableStateOf<Long?>(null) }
@@ -604,6 +665,18 @@ fun ChatScreen(
                         }
                     }
 
+                    LaunchedEffect(isStreaming, shouldStickToBottom, activeMessages.size) {
+                        if (!isStreaming || !shouldStickToBottom) return@LaunchedEffect
+                        snapshotFlow { currentStreamContent.length to currentStreamThinking.length }
+                            .sample(33L)
+                            .collect {
+                                val targetIndex = activeMessages.lastIndex + 1
+                                if (targetIndex >= 0) {
+                                    listState.scrollToItem(targetIndex)
+                                }
+                            }
+                    }
+
                     LaunchedEffect(keyboardBottomPadding, shouldStickToBottom, activeMessages.size, isStreaming) {
                         if (keyboardBottomPadding > 0.dp && shouldStickToBottom) {
                             val targetIndex = activeMessages.lastIndex + if (isStreaming) 1 else 0
@@ -626,7 +699,7 @@ fun ChatScreen(
                             verticalArrangement = Arrangement.spacedBy(10.dp),
                             contentPadding = PaddingValues(top = 12.dp, bottom = 16.dp)
                         ) {
-                            items(activeMessages, key = { it.id }) { message ->
+                            items(activeMessages, key = { it.id }, contentType = { "message" }) { message ->
                                 MessageBubbleItem(
                                     message = message,
                                     isStreamingActive = isStreaming,
@@ -666,7 +739,14 @@ fun ChatScreen(
                     ChatInputPanel(
                         viewModel = viewModel,
                         isStreaming = isStreaming,
-                        bottomPadding = bottomPadding
+                        bottomPadding = bottomPadding,
+                        onInputFocused = {
+                            coroutineScope.launch {
+                                if (activeMessages.isNotEmpty()) {
+                                    listState.scrollToItem(activeMessages.lastIndex)
+                                }
+                            }
+                        }
                     )
                 }
             }
@@ -907,7 +987,8 @@ fun ChatScreen(
 fun ChatInputPanel(
     viewModel: MainViewModel,
     isStreaming: Boolean,
-    bottomPadding: androidx.compose.ui.unit.Dp = 0.dp
+    bottomPadding: androidx.compose.ui.unit.Dp = 0.dp,
+    onInputFocused: () -> Unit = {}
 ) {
     val settings by viewModel.settingsFlow.collectAsStateWithLifecycle(initialValue = AppSettings())
     val activeSettings = settings ?: AppSettings()
@@ -977,7 +1058,12 @@ fun ChatInputPanel(
                 onValueChange = { inputStr = it },
                 placeholder = { Text("说点什么...") },
                 modifier = Modifier
-                    .weight(1f),
+                    .weight(1f)
+                    .onFocusChanged { focusState ->
+                        if (focusState.isFocused) {
+                            onInputFocused()
+                        }
+                    },
                 maxLines = 4,
                 shape = RoundedCornerShape(12.dp),
                 keyboardOptions = KeyboardOptions(
@@ -1046,7 +1132,7 @@ fun MessageBubbleItem(
     var isThinkingExpanded by remember(message.id) { mutableStateOf(false) }
     var isToolExpanded by remember(message.id) { mutableStateOf(isStreamingActive) }
     var contextMenuExpanded by remember { mutableStateOf(false) }
-    val canExpandThinking = !isStreamingActive
+    var showRawLogDialog by remember(message.id) { mutableStateOf(false) }
 
     LaunchedEffect(isStreamingActive) {
         if (isStreamingActive && isThinkingExpanded) {
@@ -1172,6 +1258,12 @@ fun MessageBubbleItem(
                     }
 
                         if (isEditing) {
+                        val editCursorColor = if (isUser) {
+                            MaterialTheme.colorScheme.onPrimary
+                        } else {
+                            MaterialTheme.colorScheme.primary
+                        }
+
                         OutlinedTextField(
                             value = editedText,
                             onValueChange = { editedText = it },
@@ -1183,9 +1275,19 @@ fun MessageBubbleItem(
                                 color = if (isUser) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
                             ),
                             colors = OutlinedTextFieldDefaults.colors(
+                                focusedContainerColor = Color.Transparent,
+                                unfocusedContainerColor = Color.Transparent,
                                 focusedTextColor = if (isUser) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
                                 unfocusedTextColor = if (isUser) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
-                                cursorColor = if (isUser) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.primary,
+                                cursorColor = editCursorColor,
+                                selectionColors = TextSelectionColors(
+                                    handleColor = editCursorColor,
+                                    backgroundColor = if (isUser) {
+                                        MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.28f)
+                                    } else {
+                                        MaterialTheme.colorScheme.primary.copy(alpha = 0.24f)
+                                    }
+                                ),
                                 focusedBorderColor = if (isUser) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.primary,
                                 unfocusedBorderColor = if (isUser) MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.5f) else MaterialTheme.colorScheme.outline
                             )
@@ -1229,15 +1331,21 @@ fun MessageBubbleItem(
                             ?.trim('\n', '\r')
                             ?.takeIf { it.isNotBlank() }
                     }
+                    val thinkingLines = remember(normalizedThinkingContent) {
+                        normalizedThinkingContent
+                            ?.lineSequence()
+                            ?.map { it.trimEnd() }
+                            ?.filter { it.isNotBlank() }
+                            ?.toList()
+                            ?: emptyList()
+                    }
+                    val hasCompactThinkingPreview = thinkingLines.size > 3
+                    val canExpandThinking = hasCompactThinkingPreview && !isStreamingActive
 
                     // Render thinking content block if any
                     if (!normalizedThinkingContent.isNullOrBlank()) {
-                        val thinkingPreview = remember(normalizedThinkingContent) {
-                            normalizedThinkingContent
-                                .lineSequence()
-                                .map { it.trimEnd() }
-                                .filter { it.isNotBlank() }
-                                .toList()
+                        val thinkingPreview = remember(thinkingLines) {
+                            thinkingLines
                                 .takeLast(3)
                                 .joinToString("\n")
                         }
@@ -1277,16 +1385,29 @@ fun MessageBubbleItem(
                                         color = thinkingTextColor.copy(alpha = 0.92f),
                                         modifier = Modifier.weight(1f)
                                     )
-                                    Icon(
-                                        imageVector = Icons.Default.ExpandMore,
-                                        contentDescription = "展缩",
-                                        modifier = Modifier
-                                            .size(16.dp)
-                                            .graphicsLayer { rotationZ = thinkingArrowRotation },
-                                        tint = thinkingTextColor.copy(alpha = if (canExpandThinking) 0.86f else 0.42f)
-                                    )
+                                    if (hasCompactThinkingPreview) {
+                                        Icon(
+                                            imageVector = Icons.Default.ExpandMore,
+                                            contentDescription = "展缩",
+                                            modifier = Modifier
+                                                .size(16.dp)
+                                                .graphicsLayer { rotationZ = thinkingArrowRotation },
+                                            tint = thinkingTextColor.copy(alpha = if (canExpandThinking) 0.86f else 0.42f)
+                                        )
+                                    }
                                 }
-                                if (!isThinkingExpanded && thinkingPreview.isNotBlank()) {
+                                if (!hasCompactThinkingPreview) {
+                                    Text(
+                                        text = normalizedThinkingContent,
+                                        style = MaterialTheme.typography.bodySmall.copy(
+                                            fontFamily = FontFamily.Monospace,
+                                            fontSize = 10.sp,
+                                            lineHeight = 14.sp
+                                        ),
+                                        color = thinkingTextColor.copy(alpha = 0.9f),
+                                        modifier = Modifier.padding(top = 6.dp)
+                                    )
+                                } else if (!isThinkingExpanded && thinkingPreview.isNotBlank()) {
                                     Text(
                                         text = thinkingPreview,
                                         style = MaterialTheme.typography.bodySmall.copy(
@@ -1300,21 +1421,23 @@ fun MessageBubbleItem(
                                         modifier = Modifier.padding(top = 4.dp)
                                     )
                                 }
-                                AnimatedVisibility(
-                                    visible = isThinkingExpanded,
-                                    enter = expandVertically() + fadeIn(),
-                                    exit = shrinkVertically() + fadeOut()
-                                ) {
-                                    Text(
-                                        normalizedThinkingContent,
-                                        style = MaterialTheme.typography.bodySmall.copy(
-                                            fontFamily = FontFamily.Monospace,
-                                            fontSize = 10.sp,
-                                            lineHeight = 14.sp
-                                        ),
-                                        color = thinkingTextColor.copy(alpha = 0.9f),
-                                        modifier = Modifier.padding(top = 6.dp)
-                                    )
+                                if (hasCompactThinkingPreview) {
+                                    AnimatedVisibility(
+                                        visible = isThinkingExpanded,
+                                        enter = expandVertically() + fadeIn(),
+                                        exit = shrinkVertically() + fadeOut()
+                                    ) {
+                                        Text(
+                                            normalizedThinkingContent,
+                                            style = MaterialTheme.typography.bodySmall.copy(
+                                                fontFamily = FontFamily.Monospace,
+                                                fontSize = 10.sp,
+                                                lineHeight = 14.sp
+                                            ),
+                                            color = thinkingTextColor.copy(alpha = 0.9f),
+                                            modifier = Modifier.padding(top = 6.dp)
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -1333,8 +1456,9 @@ fun MessageBubbleItem(
                     // Use simplified rendering path for live stream chunks to reduce per-token recomposition cost.
                     Column(modifier = Modifier.padding(top = bodyTopSpacing)) {
                         if (isLiveStream) {
+                            val renderedLiveContent = remember(normalizedBodyContent) { renderMarkdown(normalizedBodyContent) }
                             Text(
-                                text = normalizedBodyContent,
+                                text = renderedLiveContent,
                                 style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
                                 color = messageBodyTextColor
                             )
@@ -1462,6 +1586,119 @@ fun MessageBubbleItem(
                         clipboardManager.setText(AnnotatedString(message.content))
                         contextMenuExpanded = false
                     }
+                )
+                if (!isUser && !isSystem) {
+                    DropdownMenuItem(
+                        text = { Text("查看原始日志") },
+                        onClick = {
+                            showRawLogDialog = true
+                            contextMenuExpanded = false
+                        }
+                    )
+                }
+            }
+        }
+    }
+
+    if (showRawLogDialog) {
+        RawLogDialog(
+            requestBody = message.rawRequestBody,
+            responseBody = message.rawResponseBody,
+            onDismiss = { showRawLogDialog = false }
+        )
+    }
+}
+
+@Composable
+private fun RawLogDialog(
+    requestBody: String?,
+    responseBody: String?,
+    onDismiss: () -> Unit
+) {
+    val clipboardManager = LocalClipboardManager.current
+    val requestText = requestBody?.takeIf { it.isNotBlank() } ?: "暂无原始请求体。"
+    val responseText = responseBody?.takeIf { it.isNotBlank() } ?: "暂无原始响应内容。"
+
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            shape = RoundedCornerShape(18.dp),
+            tonalElevation = 8.dp,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp)
+        ) {
+            Column(
+                modifier = Modifier
+                    .padding(16.dp)
+                    .heightIn(max = 560.dp)
+                    .verticalScroll(rememberScrollState())
+            ) {
+                Text(
+                    text = "原始日志",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                RawLogSection(
+                    title = "请求体",
+                    content = requestText,
+                    onCopy = { clipboardManager.setText(AnnotatedString(requestText)) }
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                RawLogSection(
+                    title = "原始响应",
+                    content = responseText,
+                    onCopy = { clipboardManager.setText(AnnotatedString(responseText)) }
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End
+                ) {
+                    TextButton(onClick = onDismiss) {
+                        Text("关闭")
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RawLogSection(
+    title: String,
+    content: String,
+    onCopy: () -> Unit
+) {
+    Column {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Bold
+            )
+            TextButton(onClick = onCopy) {
+                Text("一键复制")
+            }
+        }
+        Surface(
+            shape = RoundedCornerShape(12.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            SelectionContainer {
+                Text(
+                    text = content,
+                    style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(12.dp)
                 )
             }
         }
@@ -1716,6 +1953,7 @@ fun PersonaManagementScreen(viewModel: MainViewModel, onNavigateToTab: (String) 
     val npcs by viewModel.allNpcsFlow.collectAsStateWithLifecycle(initialValue = emptyList())
     val agents by viewModel.allAgentsFlow.collectAsStateWithLifecycle(initialValue = emptyList())
     val mcpTools by viewModel.allMcpToolsFlow.collectAsStateWithLifecycle(initialValue = emptyList())
+    val context = LocalContext.current
 
     var activeSubTab by remember { mutableStateOf("npcs") } // "npcs", "agents" or "tools_mcp"
     var showCreateNpcDialog by remember { mutableStateOf(false) }
@@ -1787,6 +2025,7 @@ fun PersonaManagementScreen(viewModel: MainViewModel, onNavigateToTab: (String) 
                     } else {
                         LazyVerticalGridInside(
                             items = npcs,
+                            key = { it.id },
                             modifier = Modifier.fillMaxSize()
                         ) { npcItem ->
                             NpcConfigCard(
@@ -1825,6 +2064,7 @@ fun PersonaManagementScreen(viewModel: MainViewModel, onNavigateToTab: (String) 
                     } else {
                         LazyVerticalGridInside(
                             items = agents,
+                            key = { it.id },
                             modifier = Modifier.fillMaxSize()
                         ) { agentItem ->
                             AgentConfigCard(
@@ -1863,6 +2103,7 @@ fun PersonaManagementScreen(viewModel: MainViewModel, onNavigateToTab: (String) 
                     } else {
                         LazyVerticalGridInside(
                             items = mcpTools,
+                            key = { it.id },
                             modifier = Modifier.fillMaxSize()
                         ) { toolItem ->
                             McpToolCard(
@@ -1905,6 +2146,18 @@ fun PersonaManagementScreen(viewModel: MainViewModel, onNavigateToTab: (String) 
                 var promptText by remember(originalNpc) { mutableStateOf(originalNpc?.prompt ?: "") }
                 var greetingText by remember(originalNpc) { mutableStateOf(originalNpc?.greeting ?: "") }
                 var colorIndexSelected by remember(originalNpc) { mutableStateOf(originalNpc?.avatarColorOrdinal ?: 0) }
+                var avatarUriText by remember(originalNpc) { mutableStateOf(originalNpc?.avatarUri) }
+                val avatarPickerLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+                    if (uri != null) {
+                        runCatching {
+                            context.contentResolver.takePersistableUriPermission(
+                                uri,
+                                Intent.FLAG_GRANT_READ_URI_PERMISSION
+                            )
+                        }
+                        avatarUriText = uri.toString()
+                    }
+                }
 
                 Column(
                     modifier = Modifier
@@ -1944,6 +2197,39 @@ fun PersonaManagementScreen(viewModel: MainViewModel, onNavigateToTab: (String) 
                             .padding(bottom = 12.dp),
                         maxLines = 10
                     )
+
+                    Text(
+                        "角色头像:",
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(bottom = 6.dp)
+                    )
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        EntityAvatar(
+                            name = nameText.ifBlank { "NPC" },
+                            avatarColorOrdinal = colorIndexSelected,
+                            avatarUri = avatarUriText,
+                            modifier = Modifier.size(56.dp)
+                        )
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            OutlinedButton(onClick = { avatarPickerLauncher.launch(arrayOf("image/*")) }) {
+                                Icon(Icons.Default.Image, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(if (avatarUriText.isNullOrBlank()) "上传头像" else "更换头像")
+                            }
+                            if (!avatarUriText.isNullOrBlank()) {
+                                TextButton(onClick = { avatarUriText = null }) {
+                                    Text("移除头像")
+                                }
+                            }
+                        }
+                    }
 
                     Text(
                         "选择标志化代表色:",
@@ -1995,7 +2281,8 @@ fun PersonaManagementScreen(viewModel: MainViewModel, onNavigateToTab: (String) 
                                                 name = nameText,
                                                 prompt = promptText,
                                                 greeting = greetingText.ifBlank { "你好！我们准备开始啦" },
-                                                avatarColorOrdinal = colorIndexSelected
+                                                avatarColorOrdinal = colorIndexSelected,
+                                                avatarUri = avatarUriText
                                             )
                                         )
                                         editingNpc = null
@@ -2005,7 +2292,8 @@ fun PersonaManagementScreen(viewModel: MainViewModel, onNavigateToTab: (String) 
                                                 name = nameText,
                                                 prompt = promptText,
                                                 greeting = greetingText.ifBlank { "你好！我们准备开始啦" },
-                                                avatarColorOrdinal = colorIndexSelected
+                                                avatarColorOrdinal = colorIndexSelected,
+                                                avatarUri = avatarUriText
                                             )
                                         )
                                         showCreateNpcDialog = false
@@ -2060,6 +2348,18 @@ fun PersonaManagementScreen(viewModel: MainViewModel, onNavigateToTab: (String) 
                 }
 
                 var colorIndexSelected by remember(originalAgent) { mutableStateOf(originalAgent?.avatarColorOrdinal ?: 3) }
+                var avatarUriText by remember(originalAgent) { mutableStateOf(originalAgent?.avatarUri) }
+                val avatarPickerLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+                    if (uri != null) {
+                        runCatching {
+                            context.contentResolver.takePersistableUriPermission(
+                                uri,
+                                Intent.FLAG_GRANT_READ_URI_PERMISSION
+                            )
+                        }
+                        avatarUriText = uri.toString()
+                    }
+                }
 
                 Column(
                     modifier = Modifier
@@ -2081,6 +2381,39 @@ fun PersonaManagementScreen(viewModel: MainViewModel, onNavigateToTab: (String) 
                         modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
                         singleLine = true
                     )
+
+                    Text(
+                        "Agent 头像:",
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(bottom = 6.dp)
+                    )
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        EntityAvatar(
+                            name = agentName.ifBlank { "Agent" },
+                            avatarColorOrdinal = colorIndexSelected,
+                            avatarUri = avatarUriText,
+                            modifier = Modifier.size(56.dp)
+                        )
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            OutlinedButton(onClick = { avatarPickerLauncher.launch(arrayOf("image/*")) }) {
+                                Icon(Icons.Default.Image, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(if (avatarUriText.isNullOrBlank()) "上传头像" else "更换头像")
+                            }
+                            if (!avatarUriText.isNullOrBlank()) {
+                                TextButton(onClick = { avatarUriText = null }) {
+                                    Text("移除头像")
+                                }
+                            }
+                        }
+                    }
 
                     // Markdown File tabs
                     ScrollableTabRow(
@@ -2272,7 +2605,8 @@ fun PersonaManagementScreen(viewModel: MainViewModel, onNavigateToTab: (String) 
                                                 soulMd = fSoul,
                                                 userMd = fUser,
                                                 toolsJson = computedToolsJson,
-                                                avatarColorOrdinal = colorIndexSelected
+                                                avatarColorOrdinal = colorIndexSelected,
+                                                avatarUri = avatarUriText
                                             )
                                         )
                                         editingAgent = null
@@ -2286,7 +2620,8 @@ fun PersonaManagementScreen(viewModel: MainViewModel, onNavigateToTab: (String) 
                                                 soulMd = fSoul,
                                                 userMd = fUser,
                                                 toolsJson = computedToolsJson,
-                                                avatarColorOrdinal = colorIndexSelected
+                                                avatarColorOrdinal = colorIndexSelected,
+                                                avatarUri = avatarUriText
                                             )
                                         )
                                         showCreateAgentDialog = false
@@ -2560,6 +2895,7 @@ fun McpToolCard(
 @Composable
 fun <T> LazyVerticalGridInside(
     items: List<T>,
+    key: ((T) -> Any)? = null,
     modifier: Modifier = Modifier,
     content: @Composable (T) -> Unit
 ) {
@@ -2567,8 +2903,12 @@ fun <T> LazyVerticalGridInside(
         modifier = modifier,
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        items(items.size) { index ->
-            content(items[index])
+        items(
+            items = items,
+            key = if (key != null) ({ item -> key(item) }) else null,
+            contentType = { "grid-item" }
+        ) { item ->
+            content(item)
         }
     }
 }
@@ -2588,21 +2928,12 @@ fun NpcConfigCard(
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                // Colored Circle avatar with first letter name
-                Box(
-                    modifier = Modifier
-                        .size(40.dp)
-                        .clip(CircleShape)
-                        .background(AvatarColors[npc.avatarColorOrdinal.coerceIn(0, AvatarColors.lastIndex)]),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = npc.name.take(1).uppercase(),
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = Color.White
-                    )
-                }
+                EntityAvatar(
+                    name = npc.name,
+                    avatarColorOrdinal = npc.avatarColorOrdinal,
+                    avatarUri = npc.avatarUri,
+                    modifier = Modifier.size(40.dp)
+                )
 
                 Spacer(modifier = Modifier.width(12.dp))
 
@@ -2684,20 +3015,12 @@ fun AgentConfigCard(
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    modifier = Modifier
-                        .size(40.dp)
-                        .clip(CircleShape)
-                        .background(AvatarColors[agent.avatarColorOrdinal.coerceIn(0, AvatarColors.lastIndex)]),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = agent.name.take(1).uppercase(),
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = Color.White
-                    )
-                }
+                EntityAvatar(
+                    name = agent.name,
+                    avatarColorOrdinal = agent.avatarColorOrdinal,
+                    avatarUri = agent.avatarUri,
+                    modifier = Modifier.size(40.dp)
+                )
 
                 Spacer(modifier = Modifier.width(12.dp))
 
@@ -2786,8 +3109,8 @@ fun AgentConfigCard(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(viewModel: MainViewModel) {
-    val settings by viewModel.settingsFlow.collectAsStateWithLifecycle(initialValue = AppSettings())
-    val activeSettings = settings ?: AppSettings()
+    val settings by viewModel.settingsFlow.collectAsStateWithLifecycle(initialValue = null)
+    val activeSettings = settings ?: return
     val isTesting by viewModel.isTestingConnection.collectAsStateWithLifecycle()
     val modelsList by viewModel.modelsList.collectAsStateWithLifecycle()
     val testResultMessage by viewModel.testResultMessage.collectAsStateWithLifecycle()
@@ -2861,6 +3184,7 @@ fun SettingsScreen(viewModel: MainViewModel) {
                         editedKey = it
                     },
                     label = { Text("API 凭证 (API Key)") },
+                    placeholder = { Text("请输入 API Key") },
                     modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
                     visualTransformation = if (isApiKeyMasked) PasswordVisualTransformation() else VisualTransformation.None,
                     trailingIcon = {
