@@ -1258,37 +1258,40 @@ fun MessageBubbleItem(
                     }
 
                         if (isEditing) {
-                        CompositionLocalProvider(
-                            LocalTextSelectionColors provides TextSelectionColors(
-                                handleColor = Color.White,
-                                backgroundColor = if (isUser) {
-                                    MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.28f)
-                                } else {
-                                    MaterialTheme.colorScheme.primary.copy(alpha = 0.24f)
-                                }
-                            )
-                        ) {
-                            OutlinedTextField(
-                                value = editedText,
-                                onValueChange = { editedText = it },
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .focusRequester(focusRequester)
-                                    .padding(vertical = 4.dp),
-                                textStyle = MaterialTheme.typography.bodyMedium.copy(
-                                    color = if (isUser) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
-                                ),
-                                colors = OutlinedTextFieldDefaults.colors(
-                                    focusedContainerColor = Color.Transparent,
-                                    unfocusedContainerColor = Color.Transparent,
-                                    focusedTextColor = if (isUser) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
-                                    unfocusedTextColor = if (isUser) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
-                                    cursorColor = if (isUser) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.primary,
-                                    focusedBorderColor = if (isUser) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.primary,
-                                    unfocusedBorderColor = if (isUser) MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.5f) else MaterialTheme.colorScheme.outline
-                                )
-                            )
+                        val editCursorColor = if (isUser) {
+                            MaterialTheme.colorScheme.onPrimary
+                        } else {
+                            MaterialTheme.colorScheme.primary
                         }
+
+                        OutlinedTextField(
+                            value = editedText,
+                            onValueChange = { editedText = it },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .focusRequester(focusRequester)
+                                .padding(vertical = 4.dp),
+                            textStyle = MaterialTheme.typography.bodyMedium.copy(
+                                color = if (isUser) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
+                            ),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedContainerColor = Color.Transparent,
+                                unfocusedContainerColor = Color.Transparent,
+                                focusedTextColor = if (isUser) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
+                                unfocusedTextColor = if (isUser) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
+                                cursorColor = editCursorColor,
+                                selectionColors = TextSelectionColors(
+                                    handleColor = editCursorColor,
+                                    backgroundColor = if (isUser) {
+                                        MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.28f)
+                                    } else {
+                                        MaterialTheme.colorScheme.primary.copy(alpha = 0.24f)
+                                    }
+                                ),
+                                focusedBorderColor = if (isUser) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.primary,
+                                unfocusedBorderColor = if (isUser) MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.5f) else MaterialTheme.colorScheme.outline
+                            )
+                        )
                         Row(
                             modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
                             horizontalArrangement = Arrangement.End
