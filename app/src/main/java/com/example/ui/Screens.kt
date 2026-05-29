@@ -90,10 +90,11 @@ private fun EntityAvatar(
     avatarColorOrdinal: Int,
     avatarUri: String?,
     modifier: Modifier = Modifier,
-    textStyle: TextStyle = MaterialTheme.typography.titleMedium
+    textStyle: TextStyle? = null
 ) {
     val avatarColor = AvatarColors[avatarColorOrdinal.coerceIn(0, AvatarColors.lastIndex)]
     val avatarModel = remember(avatarUri) { avatarUri?.takeIf { it.isNotBlank() }?.let(Uri::parse) }
+    val resolvedTextStyle = textStyle ?: MaterialTheme.typography.titleMedium
 
     Box(
         modifier = modifier
@@ -111,7 +112,7 @@ private fun EntityAvatar(
         } else {
             Text(
                 text = avatarInitial(name),
-                style = textStyle,
+                style = resolvedTextStyle,
                 fontWeight = FontWeight.Bold,
                 color = Color.White
             )
