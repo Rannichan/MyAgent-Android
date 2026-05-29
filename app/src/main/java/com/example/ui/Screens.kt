@@ -1260,7 +1260,7 @@ fun MessageBubbleItem(
                         if (isEditing) {
                         CompositionLocalProvider(
                             LocalTextSelectionColors provides TextSelectionColors(
-                                handleColor = Color.Transparent,
+                                handleColor = Color.White,
                                 backgroundColor = if (isUser) {
                                     MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.28f)
                                 } else {
@@ -1453,8 +1453,9 @@ fun MessageBubbleItem(
                     // Use simplified rendering path for live stream chunks to reduce per-token recomposition cost.
                     Column(modifier = Modifier.padding(top = bodyTopSpacing)) {
                         if (isLiveStream) {
+                            val renderedLiveContent = remember(normalizedBodyContent) { renderMarkdown(normalizedBodyContent) }
                             Text(
-                                text = normalizedBodyContent,
+                                text = renderedLiveContent,
                                 style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
                                 color = messageBodyTextColor
                             )
