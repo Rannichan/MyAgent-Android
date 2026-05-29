@@ -5,6 +5,9 @@ import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.*
+import java.io.File
+import org.json.JSONArray
+import org.json.JSONObject
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -15,7 +18,10 @@ import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -183,13 +189,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _isApiConnected = MutableStateFlow(false)
     val isApiConnected: StateFlow<Boolean> = _isApiConnected.asStateFlow()
 
-    private val _isNavigationBarVisible = MutableStateFlow(true)
-    val isNavigationBarVisible: StateFlow<Boolean> = _isNavigationBarVisible.asStateFlow()
-
-    fun setNavigationBarVisibility(visible: Boolean) {
-        _isNavigationBarVisible.value = visible
-    }
-
     private var activeStreamingJob: Job? = null
 
     init {
@@ -202,15 +201,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         // Keep active message list updated
         viewModelScope.launch {
-            currentSessionId.collect { sessionId ->
-                if (sessionId != null) {
-                    repository.getMessagesFlow(sessionId).collect { list ->
-                        _activeMessages.value = list
+            currentSessionId
+                .flatMapLatest { sessionId ->
+                    if (sessionId != null) {
+                        repository.getMessagesFlow(sessionId)
+                    } else {
+                        flowOf(emptyList())
                     }
-                } else {
-                    _activeMessages.value = emptyList()
                 }
-            }
+                .collect { list ->
+                    _activeMessages.value = list
+                }
         }
     }
 
@@ -280,7 +281,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             val s = repository.getSettings()
             repository.updateSettings(s.copy(baseUrl = url))
-            fetchAvailableModels()
         }
     }
 
@@ -288,7 +288,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             val s = repository.getSettings()
             repository.updateSettings(s.copy(apiKey = key))
-            fetchAvailableModels()
+        }
+    }
+
+    fun updateApiConfig(url: String, key: String) {
+        viewModelScope.launch {
+            val s = repository.getSettings()
+            repository.updateSettings(s.copy(baseUrl = url, apiKey = key))
         }
     }
 
@@ -309,7 +315,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun updateHyperparams(temp: Float, tokens: Int, topP: Float) {
         viewModelScope.launch {
             val s = repository.getSettings()
-            repository.updateSettings(s.copy(temperature = temp, maxTokens = tokens, topP = topP))
+            repository.updateSettings(
+                s.copy(
+                    temperature = temp,
+                    maxTokens = tokens.coerceIn(1, 20000),
+                    topP = topP
+                )
+            )
         }
     }
 
@@ -331,19 +343,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun fetchAvailableModels() {
+    fun fetchAvailableModels(baseUrlOverride: String? = null, apiKeyOverride: String? = null) {
         viewModelScope.launch {
             _isTestingConnection.value = true
             _testResultMessage.value = null
             val s = repository.getSettings()
+            val baseUrl = baseUrlOverride ?: s.baseUrl
+            val apiKey = apiKeyOverride ?: s.apiKey
             try {
-                val result = repository.fetchModelsFromEndpoint(s.baseUrl, s.apiKey)
+                val result = repository.fetchModelsFromEndpoint(baseUrl, apiKey)
                 _modelsList.value = result.idList
                 if (result.idList.isNotEmpty()) {
                     _isApiConnected.value = true
                     _testResultMessage.value = "SUCCESS:连接测试成功！已加载 ${result.idList.size} 个可用模型。\n\n【接口原始返回】:\n${result.rawResponse}"
                 } else {
-                    _isApiConnected.value = s.apiKey.isNotBlank()
+                    _isApiConnected.value = apiKey.isNotBlank()
                     _testResultMessage.value = "SUCCESS:连接测试成功，但该接口返回的模型列表为空。\n\n【接口原始返回】:\n${result.rawResponse}"
                 }
             } catch (e: Exception) {
@@ -400,28 +414,35 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun exportChatHistoryText(sessionId: Long, onReady: (String) -> Unit) {
+    fun exportSessionRequestJsonFile(sessionId: Long, onReady: (File) -> Unit) {
         viewModelScope.launch {
-            val messages = repository.getMessages(sessionId)
+            val settings = repository.getSettings()
             val session = repository.sessionDao.getSessionById(sessionId)
-            val formatStr = buildString {
-                append("=== CONFIGURABLE AGENT/NPC CHAT LOG ===\n")
-                append("Session: ${session?.title ?: "Chat"}\n")
-                append("Mode: ${session?.mode ?: "Standard"}\n")
-                append("Exported: ${java.util.Date()}\n\n")
-                for (m in messages) {
-                    append("[${m.role.uppercase()} - ${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(m.timestamp)}]\n")
-                    if (!m.thinkingContent.isNullOrBlank()) {
-                        append("<thinking>\n${m.thinkingContent}\n</thinking>\n")
+            val messages = buildNetworkMessagesForSession(sessionId, settings)
+
+            val payload = JSONObject().apply {
+                put("sessionId", sessionId)
+                put("sessionTitle", session?.title ?: "Chat")
+                put("mode", session?.mode ?: "STANDARD")
+                put("exportedAt", System.currentTimeMillis())
+                put("messages", JSONArray().apply {
+                    messages.forEach { msg ->
+                        put(
+                            JSONObject().apply {
+                                put("role", msg.role)
+                                put("content", msg.content)
+                            }
+                        )
                     }
-                    append("${m.content}\n")
-                    if (m.promptTokens > 0) {
-                        append("(Prompt: ${m.promptTokens} tokens, Completion: ${m.completionTokens} tokens, Speed: ${m.tokensPerSec} t/s, Latency: ${m.latencyMs}ms, Model: ${m.modelUsed})\n")
-                    }
-                    append("\n----------------------------\n")
-                }
+                })
             }
-            onReady(formatStr)
+
+            val sharedDir = File(getApplication<Application>().cacheDir, "shared").apply { mkdirs() }
+            val file = File(sharedDir, "chat_${sessionId}_${System.currentTimeMillis()}.json")
+            withContext(Dispatchers.IO) {
+                file.writeText(payload.toString(2))
+            }
+            onReady(file)
         }
     }
 
@@ -518,6 +539,54 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun interruptGeneration() {
+        val sessionId = _currentSessionId.value
+        val partialContent = _currentStreamContent.value
+        val partialThinking = _currentStreamThinking.value.takeIf { it.isNotBlank() }
+
+        activeStreamingJob?.cancel(CancellationException("Interrupted by user"))
+        activeStreamingJob = null
+
+        _isStreamingActive.value = false
+        _currentStreamContent.value = ""
+        _currentStreamThinking.value = ""
+
+        if (sessionId != null && (partialContent.isNotBlank() || !partialThinking.isNullOrBlank())) {
+            viewModelScope.launch {
+                val settings = repository.getSettings()
+                repository.insertMessage(
+                    ChatMessage(
+                        sessionId = sessionId,
+                        role = "assistant",
+                        content = partialContent,
+                        thinkingContent = partialThinking,
+                        modelUsed = settings.defaultModel
+                    )
+                )
+            }
+        }
+    }
+
+    private fun supportsThinkingSwitchParam(model: String, baseUrl: String): Boolean {
+        val source = (model + " " + baseUrl).lowercase()
+        return listOf("deepseek", "qwen", "qwq", "r1", "siliconflow", "dashscope", "ollama", "vllm")
+            .any { source.contains(it) }
+    }
+
+    private fun usesQwenExtraBodySwitch(model: String, baseUrl: String): Boolean {
+        val source = (model + " " + baseUrl).lowercase()
+        return source.contains("qwen")
+    }
+
+    private fun sanitizeHistoryContentForModel(content: String): String {
+        return content
+            .replace(Regex("""<tool_call\b[^>]*>[\s\S]*?</tool_call>""", RegexOption.IGNORE_CASE), " ")
+            .replace(Regex("""<thinking>[\s\S]*?</thinking>""", RegexOption.IGNORE_CASE), " ")
+            .replace(Regex("""</?think>""", RegexOption.IGNORE_CASE), " ")
+            .replace(Regex("""\s+"""), " ")
+            .trim()
+    }
+
     // Simulated custom tool execute input
     fun simulateToolResponse(toolName: String, simulatedOutput: String) {
         val sessionId = _currentSessionId.value ?: return
@@ -550,54 +619,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             _tokensPerSec.value = 0.0
 
             val settings = repository.getSettings()
-            val session = repository.sessionDao.getSessionById(sessionId) ?: return@launch
             val rawMessagesList = repository.getMessages(sessionId)
-
-            // Organize standard LLM System prompts combined with NPC prompts / Agent MD files
-            val promptSystemMessages = buildList {
-                when (session.mode) {
-                    "NPC" -> {
-                        val npc = repository.npcDao.getNpcById(session.associatedId)
-                        if (npc != null) {
-                            add(NetworkMessage("system", npc.prompt))
-                        } else {
-                            add(NetworkMessage("system", "You are a helpful AI Assistant."))
-                        }
-                    }
-                    "AGENT" -> {
-                        val agent = repository.agentDao.getAgentById(session.associatedId)
-                        if (agent != null) {
-                            val combinedAgentPrompt = buildString {
-                                append("=== AGENT CORE SYSTEM PROMPT ===\n")
-                                append("Below are custom instructions structured via system file declarations (Agent.md, Identity.md, Memory.md, Soul.md, User.md).\n\n")
-                                append(agent.agentMd).append("\n\n")
-                                append(agent.identityMd).append("\n\n")
-                                append(agent.memoryMd).append("\n\n")
-                                append(agent.soulMd).append("\n\n")
-                                append(agent.userMd).append("\n\n")
-                                
-                                if (settings.isToolCallsEnabled && agent.toolsJson.isNotBlank()) {
-                                    append("=== AVAILABLE INTEGRATED CUSTOM TOOLS ===\n")
-                                    append("You can simulate tool execution by outputting exactly when you need to call a tool:\n")
-                                    append("<tool_call name=\"tool_name\">{\"parameter_name\": \"value\"}</tool_call>\n\n")
-                                    append("Integrated schemas:\n")
-                                    append(agent.toolsJson).append("\n\n")
-                                    append("Instructions: If you invoke a tool call, please wait. Do not generate the answer until you receive response feedback.")
-                                }
-                            }
-                            add(NetworkMessage("system", combinedAgentPrompt))
-                        } else {
-                            add(NetworkMessage("system", "You are an analytical assistant Agent."))
-                        }
-                    }
-                    else -> {
-                        add(NetworkMessage("system", "You are a helpful assistant."))
-                    }
-                }
-            }
-
-            // Group existing database logs as network messages
-            val networkMessages = promptSystemMessages + rawMessagesList.map { NetworkMessage(it.role, it.content) }
+            val networkMessages = buildNetworkMessagesForSession(sessionId, settings)
 
             val req = ChatCompletionRequest(
                 model = settings.defaultModel,
@@ -605,17 +628,28 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 temperature = settings.temperature,
                 top_p = settings.topP,
                 max_tokens = if (settings.maxTokens > 0) settings.maxTokens else null,
-                stream = settings.isStreaming
+                stream = settings.isStreaming,
+                stream_options = if (settings.isStreaming) StreamOptions(include_usage = true) else null,
+                enable_thinking = if (!settings.isThinkingModeEnabled && !usesQwenExtraBodySwitch(settings.defaultModel, settings.baseUrl) && supportsThinkingSwitchParam(settings.defaultModel, settings.baseUrl)) false else null,
+                extra_body = if (!settings.isThinkingModeEnabled && usesQwenExtraBodySwitch(settings.defaultModel, settings.baseUrl)) {
+                    ExtraBody(
+                        chat_template_kwargs = ChatTemplateKwargs(enable_thinking = false)
+                    )
+                } else {
+                    null
+                }
             )
 
             val startTime = System.currentTimeMillis()
             var firstTokenTime = 0L
             var characterCollectorOfStream = 0
             var thinkingCollectorOfStream = 0
+            var usageTotalTokens = 0
 
             // If user disabled stream, we can simulate stream by getting a bulk call, or OkHttp Service streams it fine anyway
             repository.streamAssistantResponse(settings.baseUrl, settings.apiKey, req)
                 .catch { t ->
+                    if (t is CancellationException) throw t
                     Log.e("MainViewModel", "Stream collection error", t)
                     _currentStreamContent.value = "Connection error: ${t.localizedMessage ?: t.message}"
                     _isStreamingActive.value = false
@@ -664,6 +698,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         is ChatStreamChunk.Usage -> {
                             _tokenCountPrompt.value = chunk.promptTokens
                             _tokenCountCompletion.value = chunk.completionTokens
+                            usageTotalTokens = chunk.totalTokens
                         }
                         is ChatStreamChunk.Error -> {
                             _currentStreamContent.value += "\n\nError: " + chunk.message
@@ -683,8 +718,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 }
 
-            // Calculation when stream finishes
-            val finalLatencyMs = _latencyMs.value.takeIf { it > 0 } ?: (System.currentTimeMillis() - startTime)
+            // Use full round-trip duration so latency includes thinking and tool-call stages.
+            val finalLatencyMs = System.currentTimeMillis() - startTime
             val textToSave = _currentStreamContent.value
             val thinkingToSave = _currentStreamThinking.value.takeIf { it.isNotBlank() }
 
@@ -692,8 +727,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val estimatedCompletionTokens = _tokenCountCompletion.value.takeIf { it > 0 } ?: (totalCharCount / 3.8).toInt().coerceAtLeast(1)
             val lastUserMessage = rawMessagesList.lastOrNull { it.role == "user" }?.content ?: ""
             val estimatedPromptTokens = _tokenCountPrompt.value.takeIf { it > 0 } ?: (lastUserMessage.length / 3.8).toInt().coerceAtLeast(1)
+            val estimatedTotalTokens = if (usageTotalTokens > 0) {
+                usageTotalTokens
+            } else {
+                estimatedPromptTokens + estimatedCompletionTokens
+            }
 
-            val totalElapsedSec = (System.currentTimeMillis() - finalLatencyMs) / 1000.0
+            val generationStartTime = firstTokenTime.takeIf { it > 0 } ?: startTime
+            val totalElapsedSec = (System.currentTimeMillis() - generationStartTime) / 1000.0
             val finalTokensPerSec = if (totalElapsedSec > 0.1) estimatedCompletionTokens / totalElapsedSec else 0.0
 
             if (textToSave.isNotBlank() || !thinkingToSave.isNullOrBlank()) {
@@ -706,7 +747,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         latencyMs = finalLatencyMs,
                         promptTokens = estimatedPromptTokens,
                         completionTokens = estimatedCompletionTokens,
-                        totalTokens = estimatedPromptTokens + estimatedCompletionTokens,
+                        totalTokens = estimatedTotalTokens,
                         tokensPerSec = finalTokensPerSec,
                         modelUsed = settings.defaultModel
                     )
@@ -717,5 +758,61 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             _currentStreamContent.value = ""
             _currentStreamThinking.value = ""
         }
+    }
+
+    private suspend fun buildNetworkMessagesForSession(sessionId: Long, settings: AppSettings): List<NetworkMessage> {
+        val session = repository.sessionDao.getSessionById(sessionId) ?: return emptyList()
+        val rawMessagesList = repository.getMessages(sessionId)
+
+        val promptSystemMessages = buildList {
+            when (session.mode) {
+                "NPC" -> {
+                    val npc = repository.npcDao.getNpcById(session.associatedId)
+                    if (npc != null) {
+                        add(NetworkMessage("system", npc.prompt))
+                    } else {
+                        add(NetworkMessage("system", "You are a helpful AI Assistant."))
+                    }
+                }
+
+                "AGENT" -> {
+                    val agent = repository.agentDao.getAgentById(session.associatedId)
+                    if (agent != null) {
+                        val combinedAgentPrompt = buildString {
+                            append("=== AGENT CORE SYSTEM PROMPT ===\n")
+                            append("Below are custom instructions structured via system file declarations (Agent.md, Identity.md, Memory.md, Soul.md, User.md).\n\n")
+                            append(agent.agentMd).append("\n\n")
+                            append(agent.identityMd).append("\n\n")
+                            append(agent.memoryMd).append("\n\n")
+                            append(agent.soulMd).append("\n\n")
+                            append(agent.userMd).append("\n\n")
+
+                            if (settings.isToolCallsEnabled && agent.toolsJson.isNotBlank()) {
+                                append("=== AVAILABLE INTEGRATED CUSTOM TOOLS ===\n")
+                                append("You can simulate tool execution by outputting exactly when you need to call a tool:\n")
+                                append("<tool_call name=\"tool_name\">{\"parameter_name\": \"value\"}</tool_call>\n\n")
+                                append("Integrated schemas:\n")
+                                append(agent.toolsJson).append("\n\n")
+                                append("Instructions: If you invoke a tool call, please wait. Do not generate the answer until you receive response feedback.")
+                            }
+                        }
+                        add(NetworkMessage("system", combinedAgentPrompt))
+                    } else {
+                        add(NetworkMessage("system", "You are an analytical assistant Agent."))
+                    }
+                }
+
+                else -> {
+                    add(NetworkMessage("system", "You are a helpful assistant."))
+                }
+            }
+        }
+
+        val historyMessages = rawMessagesList.mapNotNull { msg ->
+            val cleaned = sanitizeHistoryContentForModel(msg.content)
+            if (cleaned.isBlank()) null else NetworkMessage(msg.role, cleaned)
+        }
+
+        return promptSystemMessages + historyMessages
     }
 }

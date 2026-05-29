@@ -4,7 +4,9 @@ import androidx.compose.animation.*
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.text.selection.SelectionContainer
 import com.example.ui.theme.AgentHubTheme
+import androidx.activity.compose.BackHandler
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
@@ -24,17 +26,19 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
-import androidx.compose.ui.input.nestedscroll.NestedScrollSource
-import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.*
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
@@ -42,12 +46,16 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import androidx.core.content.FileProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.*
+import kotlinx.coroutines.flow.sample
 import kotlinx.coroutines.launch
 
 // Color index mapper for dynamic avatars
@@ -67,65 +75,57 @@ fun MainAppContainer(viewModel: MainViewModel) {
     val activeSettings = settings ?: AppSettings()
 
     var currentTab by remember { mutableStateOf("chat") }
-    val isNavigationBarVisible by viewModel.isNavigationBarVisible.collectAsStateWithLifecycle()
 
     AgentHubTheme(
         themeMode = activeSettings.themeMode,
         themeColor = activeSettings.themeColor
     ) {
-        val isKeyboardVisible = WindowInsets.isImeVisible
         Scaffold(
             bottomBar = {
-                AnimatedVisibility(
-                    visible = (isNavigationBarVisible && !isKeyboardVisible) || (currentTab != "chat" && !isKeyboardVisible),
-                    enter = slideInVertically(animationSpec = spring()) { it } + fadeIn(),
-                    exit = slideOutVertically(animationSpec = spring()) { it } + fadeOut()
+                NavigationBar(
+                    windowInsets = WindowInsets.navigationBars,
+                    tonalElevation = 8.dp,
+                    containerColor = MaterialTheme.colorScheme.surface
                 ) {
-                    NavigationBar(
-                        windowInsets = WindowInsets.navigationBars,
-                        tonalElevation = 8.dp,
-                        containerColor = MaterialTheme.colorScheme.surface
-                    ) {
-                        NavigationBarItem(
-                            selected = currentTab == "chat",
-                            onClick = { currentTab = "chat" },
-                            icon = { Icon(Icons.Default.Chat, contentDescription = "对话") },
-                            label = { Text("对话") },
-                            colors = NavigationBarItemDefaults.colors(
-                                selectedIconColor = MaterialTheme.colorScheme.primary,
-                                selectedTextColor = MaterialTheme.colorScheme.primary,
-                                unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-                                unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-                                indicatorColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
-                            )
+                    NavigationBarItem(
+                        selected = currentTab == "chat",
+                        onClick = { currentTab = "chat" },
+                        icon = { Icon(Icons.Default.Chat, contentDescription = "对话") },
+                        label = { Text("对话") },
+                        colors = NavigationBarItemDefaults.colors(
+                            selectedIconColor = MaterialTheme.colorScheme.primary,
+                            selectedTextColor = MaterialTheme.colorScheme.primary,
+                            unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                            unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                            indicatorColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
                         )
-                        NavigationBarItem(
-                            selected = currentTab == "personas",
-                            onClick = { currentTab = "personas" },
-                            icon = { Icon(Icons.Default.RecentActors, contentDescription = "角色工坊") },
-                            label = { Text("角色工坊") },
-                            colors = NavigationBarItemDefaults.colors(
-                                selectedIconColor = MaterialTheme.colorScheme.primary,
-                                selectedTextColor = MaterialTheme.colorScheme.primary,
-                                unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-                                unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-                                indicatorColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
-                            )
+                    )
+                    NavigationBarItem(
+                        selected = currentTab == "personas",
+                        onClick = { currentTab = "personas" },
+                        icon = { Icon(Icons.Default.RecentActors, contentDescription = "角色工坊") },
+                        label = { Text("角色工坊") },
+                        colors = NavigationBarItemDefaults.colors(
+                            selectedIconColor = MaterialTheme.colorScheme.primary,
+                            selectedTextColor = MaterialTheme.colorScheme.primary,
+                            unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                            unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                            indicatorColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
                         )
-                        NavigationBarItem(
-                            selected = currentTab == "settings",
-                            onClick = { currentTab = "settings" },
-                            icon = { Icon(Icons.Default.Settings, contentDescription = "设置") },
-                            label = { Text("设置") },
-                            colors = NavigationBarItemDefaults.colors(
-                                selectedIconColor = MaterialTheme.colorScheme.primary,
-                                selectedTextColor = MaterialTheme.colorScheme.primary,
-                                unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-                                unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-                                indicatorColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
-                            )
+                    )
+                    NavigationBarItem(
+                        selected = currentTab == "settings",
+                        onClick = { currentTab = "settings" },
+                        icon = { Icon(Icons.Default.Settings, contentDescription = "设置") },
+                        label = { Text("设置") },
+                        colors = NavigationBarItemDefaults.colors(
+                            selectedIconColor = MaterialTheme.colorScheme.primary,
+                            selectedTextColor = MaterialTheme.colorScheme.primary,
+                            unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                            unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                            indicatorColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
                         )
-                    }
+                    )
                 }
             }
         ) { innerPadding ->
@@ -140,7 +140,19 @@ fun MainAppContainer(viewModel: MainViewModel) {
                 AnimatedContent(
                     targetState = currentTab,
                     transitionSpec = {
-                        fadeIn(animationSpec = spring()) togetherWith fadeOut(animationSpec = spring())
+                        val tabOrder = mapOf("chat" to 0, "personas" to 1, "settings" to 2)
+                        val initialIndex = tabOrder[initialState] ?: 0
+                        val targetIndex = tabOrder[targetState] ?: 0
+                        val direction = if (targetIndex >= initialIndex) 1 else -1
+
+                        (slideInHorizontally(
+                            initialOffsetX = { fullWidth -> (fullWidth / 3) * direction },
+                            animationSpec = spring()
+                        ) + fadeIn(animationSpec = spring())) togetherWith
+                                (slideOutHorizontally(
+                                    targetOffsetX = { fullWidth -> (-fullWidth / 3) * direction },
+                                    animationSpec = spring()
+                                ) + fadeOut(animationSpec = spring()))
                     },
                     label = "TabTransition"
                 ) { targetTab ->
@@ -171,10 +183,6 @@ fun ChatScreen(
     val npcs by viewModel.allNpcsFlow.collectAsStateWithLifecycle(initialValue = emptyList())
     val agents by viewModel.allAgentsFlow.collectAsStateWithLifecycle(initialValue = emptyList())
     val isStreaming by viewModel.isStreamingActive.collectAsStateWithLifecycle()
-    val latency by viewModel.latencyMs.collectAsStateWithLifecycle()
-    val tokenPrompt by viewModel.tokenCountPrompt.collectAsStateWithLifecycle()
-    val tokenCompletion by viewModel.tokenCountCompletion.collectAsStateWithLifecycle()
-    val speedTPS by viewModel.tokensPerSec.collectAsStateWithLifecycle()
 
     var searchQuery by remember { mutableStateOf("") }
     var isSearching by remember { mutableStateOf(false) }
@@ -184,6 +192,15 @@ fun ChatScreen(
 
     val filteredSessions = sessions.filter {
         it.title.contains(searchQuery, ignoreCase = true) || it.mode.contains(searchQuery, ignoreCase = true)
+    }
+
+    BackHandler(enabled = currentSessionId == null && isSearching) {
+        isSearching = false
+        searchQuery = ""
+    }
+
+    BackHandler(enabled = currentSessionId != null) {
+        viewModel.selectSession(null)
     }
 
     val context = LocalContext.current
@@ -313,9 +330,9 @@ fun ChatScreen(
                         LazyColumn(
                             modifier = Modifier
                                 .fillMaxSize()
-                                .padding(horizontal = 16.dp, vertical = 8.dp),
-                            verticalArrangement = Arrangement.spacedBy(8.dp),
-                            contentPadding = PaddingValues(bottom = bottomPadding + 16.dp)
+                                .padding(horizontal = 16.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp),
+                            contentPadding = PaddingValues(top = 12.dp, bottom = bottomPadding + 20.dp)
                         ) {
                             items(filteredSessions, key = { it.id }) { item ->
                                 val badgeColor = when (item.mode) {
@@ -334,11 +351,11 @@ fun ChatScreen(
                                     colors = CardDefaults.cardColors(
                                         containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
                                     ),
-                                    shape = RoundedCornerShape(12.dp),
+                                    shape = RoundedCornerShape(14.dp),
                                     border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.1f))
                                 ) {
                                     Row(
-                                        modifier = Modifier.padding(16.dp),
+                                        modifier = Modifier.padding(horizontal = 18.dp, vertical = 16.dp),
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
                                         Box(
@@ -383,7 +400,8 @@ fun ChatScreen(
                                                 item.lastMessage.ifEmpty { "暂无消息" },
                                                 style = MaterialTheme.typography.bodySmall,
                                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                                maxLines = 1
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
                                             )
                                         }
                                     }
@@ -411,6 +429,9 @@ fun ChatScreen(
             } else {
                 "Agent Hub 对话"
             }
+            val settingsItem by viewModel.settingsFlow.collectAsStateWithLifecycle(initialValue = AppSettings())
+            val isApiConnected by viewModel.isApiConnected.collectAsStateWithLifecycle()
+            val modelsList by viewModel.modelsList.collectAsStateWithLifecycle()
 
             Column(modifier = Modifier.fillMaxSize()) {
                 TopAppBar(
@@ -420,38 +441,41 @@ fun ChatScreen(
                                 displayTitle,
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onSurface
+                                color = MaterialTheme.colorScheme.onSurface,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
-                            val settingsItem by viewModel.settingsFlow.collectAsStateWithLifecycle(initialValue = AppSettings())
-                            val isApiConnected by viewModel.isApiConnected.collectAsStateWithLifecycle()
-                            val modelsList by viewModel.modelsList.collectAsStateWithLifecycle()
+                            Spacer(modifier = Modifier.height(2.dp))
                             Box {
                                 Row(
                                     verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(2.dp),
                                     modifier = Modifier
-                                        .padding(top = 2.dp)
                                         .clip(RoundedCornerShape(4.dp))
                                         .clickable { topModelExpanded = true }
                                         .padding(horizontal = 4.dp, vertical = 2.dp)
                                 ) {
                                     Box(
                                         modifier = Modifier
-                                            .size(6.dp)
+                                            .size(7.dp)
                                             .clip(CircleShape)
                                             .background(if (isApiConnected) Color(0xFF10B981) else Color(0xFFEF4444))
                                     )
+                                    Spacer(modifier = Modifier.width(2.dp))
                                     Text(
-                                        if (isApiConnected) (settingsItem?.defaultModel ?: "gpt-4o-mini").uppercase() else "not connected",
+                                        text = settingsItem?.defaultModel ?: "gpt-4o-mini",
                                         style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
-                                        color = if (isApiConnected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
-                                        fontWeight = FontWeight.Bold
+                                        color = MaterialTheme.colorScheme.primary,
+                                        fontWeight = FontWeight.Bold,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.widthIn(max = 96.dp)
                                     )
                                     Icon(
                                         Icons.Default.ArrowDropDown,
                                         contentDescription = null,
                                         modifier = Modifier.size(14.dp),
-                                        tint = if (isApiConnected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
+                                        tint = MaterialTheme.colorScheme.primary
                                     )
                                 }
                                 DropdownMenu(
@@ -506,13 +530,19 @@ fun ChatScreen(
                     actions = {
                         if (activeSession != null) {
                             IconButton(onClick = {
-                                viewModel.exportChatHistoryText(activeSession.id) { log ->
+                                viewModel.exportSessionRequestJsonFile(activeSession.id) { jsonFile ->
+                                    val jsonUri = FileProvider.getUriForFile(
+                                        context,
+                                        "${context.packageName}.fileprovider",
+                                        jsonFile
+                                    )
                                     val sendIntent = android.content.Intent().apply {
                                         action = android.content.Intent.ACTION_SEND
-                                        putExtra(android.content.Intent.EXTRA_TEXT, log)
-                                        type = "text/plain"
+                                        putExtra(android.content.Intent.EXTRA_STREAM, jsonUri)
+                                        addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                        type = "application/json"
                                     }
-                                    val shareIntent = android.content.Intent.createChooser(sendIntent, "分享对话历史")
+                                    val shareIntent = android.content.Intent.createChooser(sendIntent, "分享对话 JSON")
                                     context.startActivity(shareIntent)
                                 }
                             }) {
@@ -533,110 +563,53 @@ fun ChatScreen(
 
                 HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f))
 
-                if (activeSession != null) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .background(MaterialTheme.colorScheme.background)
-                            .padding(horizontal = 16.dp, vertical = 8.dp),
-                        horizontalArrangement = Arrangement.Start,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(10.dp)
-                        ) {
-                            Surface(
-                                shape = RoundedCornerShape(4.dp),
-                                color = Color(0xFF332D41),
-                                modifier = Modifier.padding(vertical = 2.dp)
-                            ) {
-                                Text(
-                                    " ${activeSession.mode} MODE ",
-                                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                                    color = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                                )
-                            }
-
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                Text(
-                                    "⏱️ ${if (latency > 0) "${latency}ms" else "READY"}",
-                                    style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp, fontFamily = FontFamily.Monospace),
-                                    color = if (latency > 0) Color(0xFF10B981) else MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                                Box(modifier = Modifier.width(1.dp).height(10.dp).background(MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)))
-                                Text(
-                                    "⚡ ${String.format("%.1f", speedTPS)} t/s",
-                                    style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp, fontFamily = FontFamily.Monospace),
-                                    color = MaterialTheme.colorScheme.primary
-                                )
-                                Box(modifier = Modifier.width(1.dp).height(10.dp).background(MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)))
-                                Text(
-                                    "📥 $tokenPrompt tok",
-                                    style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp, fontFamily = FontFamily.Monospace),
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                                Box(modifier = Modifier.width(1.dp).height(10.dp).background(MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)))
-                                Text(
-                                    "📤 $tokenCompletion tok",
-                                    style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp, fontFamily = FontFamily.Monospace),
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                        }
-                    }
-                    HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f))
-                }
-
                 Column(
                     modifier = Modifier
                         .weight(1f)
                         .fillMaxWidth()
                 ) {
+                    val density = LocalDensity.current
+                    val keyboardBottomPadding = with(density) { WindowInsets.ime.getBottom(density).toDp() }
                     val listState = rememberLazyListState()
-
-                    DisposableEffect(Unit) {
-                        onDispose {
-                            viewModel.setNavigationBarVisibility(true)
+                    var lastAutoScrolledSessionId by remember { mutableStateOf<Long?>(null) }
+                    var collapseThinkingSignal by remember { mutableStateOf(0) }
+                    var lastHandledUserMessageId by remember(currentSessionId) { mutableStateOf<Long?>(null) }
+                    val lastMessage = activeMessages.lastOrNull()
+                    val shouldStickToBottom by remember {
+                        derivedStateOf {
+                            val totalItems = listState.layoutInfo.totalItemsCount
+                            val lastVisibleIndex = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
+                            totalItems == 0 || lastVisibleIndex >= totalItems - 2
                         }
                     }
 
-                    LaunchedEffect(listState) {
-                        var previousIndex = 0
-                        var previousOffset = 0
-                        snapshotFlow { listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset }
-                            .collect { (currentIndex, currentOffset) ->
-                                if (currentIndex > previousIndex) {
-                                    viewModel.setNavigationBarVisibility(false)
-                                } else if (currentIndex < previousIndex) {
-                                    viewModel.setNavigationBarVisibility(true)
-                                } else {
-                                    val delta = currentOffset - previousOffset
-                                    if (delta > 15) {
-                                        viewModel.setNavigationBarVisibility(false)
-                                    } else if (delta < -15) {
-                                        viewModel.setNavigationBarVisibility(true)
-                                    }
-                                }
-                                previousIndex = currentIndex
-                                previousOffset = currentOffset
+                    LaunchedEffect(targetSessionId, activeMessages.size) {
+                        if (targetSessionId != null && activeMessages.isNotEmpty() && lastAutoScrolledSessionId != targetSessionId) {
+                            listState.scrollToItem(activeMessages.lastIndex)
+                            lastAutoScrolledSessionId = targetSessionId
+                        }
+                    }
+
+                    LaunchedEffect(lastMessage?.id, lastMessage?.role) {
+                        if (lastMessage != null && lastMessage.role == "user" && lastMessage.id != lastHandledUserMessageId) {
+                            lastHandledUserMessageId = lastMessage.id
+                            collapseThinkingSignal++
+                            listState.scrollToItem(activeMessages.lastIndex)
+                        }
+                    }
+
+                    LaunchedEffect(activeMessages.size, isStreaming, shouldStickToBottom) {
+                        if (activeMessages.isNotEmpty() && shouldStickToBottom && !isStreaming) {
+                            listState.scrollToItem(activeMessages.lastIndex)
+                        }
+                    }
+
+                    LaunchedEffect(keyboardBottomPadding, shouldStickToBottom, activeMessages.size, isStreaming) {
+                        if (keyboardBottomPadding > 0.dp && shouldStickToBottom) {
+                            val targetIndex = activeMessages.lastIndex + if (isStreaming) 1 else 0
+                            if (targetIndex >= 0) {
+                                listState.scrollToItem(targetIndex)
                             }
-                    }
-
-                    LaunchedEffect(activeMessages.size, isStreaming) {
-                        if (activeMessages.isNotEmpty()) {
-                            listState.animateScrollToItem(activeMessages.lastIndex)
-                        }
-                    }
-
-                    val keyboardPadding = WindowInsets.ime.asPaddingValues().calculateBottomPadding()
-                    LaunchedEffect(keyboardPadding) {
-                        if (keyboardPadding > 0.dp && activeMessages.isNotEmpty()) {
-                            listState.animateScrollToItem(activeMessages.lastIndex)
                         }
                     }
 
@@ -653,10 +626,11 @@ fun ChatScreen(
                             verticalArrangement = Arrangement.spacedBy(10.dp),
                             contentPadding = PaddingValues(top = 12.dp, bottom = 16.dp)
                         ) {
-                            items(activeMessages) { message ->
+                            items(activeMessages, key = { it.id }) { message ->
                                 MessageBubbleItem(
                                     message = message,
                                     isStreamingActive = isStreaming,
+                                    collapseThinkingSignal = collapseThinkingSignal,
                                     assistantName = displayTitle,
                                     onSimulateToolOutput = { toolName, output ->
                                         viewModel.simulateToolResponse(toolName, output)
@@ -666,6 +640,23 @@ fun ChatScreen(
                                         viewModel.editUserMessage(message.id, newContent)
                                     }
                                 )
+                            }
+
+                            if (isStreaming) {
+                                item(key = "live-streaming-message") {
+                                    LiveStreamingMessageItem(
+                                        viewModel = viewModel,
+                                        sessionId = currentSessionId,
+                                        isStreamingActive = true,
+                                        collapseThinkingSignal = collapseThinkingSignal,
+                                        assistantName = displayTitle,
+                                        onSimulateToolOutput = { toolName, output ->
+                                            viewModel.simulateToolResponse(toolName, output)
+                                        },
+                                        onDeleteMessage = {},
+                                        onEditMessage = {}
+                                    )
+                                }
                             }
                         }
                     }
@@ -921,22 +912,14 @@ fun ChatInputPanel(
     val settings by viewModel.settingsFlow.collectAsStateWithLifecycle(initialValue = AppSettings())
     val activeSettings = settings ?: AppSettings()
     var inputStr by remember { mutableStateOf("") }
-
-    val keyboardPadding = WindowInsets.ime.asPaddingValues().calculateBottomPadding()
-    val isKeyboardOpen = keyboardPadding > 0.dp
+    val density = LocalDensity.current
+    val keyboardBottomPadding = with(density) { WindowInsets.ime.getBottom(density).toDp() }
+    val effectiveBottomPadding = if (keyboardBottomPadding > bottomPadding) keyboardBottomPadding else bottomPadding
 
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .then(
-                if (isKeyboardOpen) {
-                    Modifier.imePadding()
-                } else if (bottomPadding > 0.dp) {
-                    Modifier.padding(bottom = bottomPadding)
-                } else {
-                    Modifier.navigationBarsPadding()
-                }
-            )
+            .padding(bottom = effectiveBottomPadding)
             .padding(12.dp)
     ) {
         // Option quick toggle strip
@@ -1015,7 +998,9 @@ fun ChatInputPanel(
 
             FloatingActionButton(
                 onClick = {
-                    if (inputStr.isNotBlank() && !isStreaming) {
+                    if (isStreaming) {
+                        viewModel.interruptGeneration()
+                    } else if (inputStr.isNotBlank()) {
                         viewModel.sendMessage(inputStr)
                         inputStr = ""
                     }
@@ -1026,11 +1011,7 @@ fun ChatInputPanel(
                 modifier = Modifier.size(52.dp)
             ) {
                 if (isStreaming) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(24.dp),
-                        strokeWidth = 2.dp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    Icon(Icons.Default.Stop, contentDescription = "停止生成")
                 } else {
                     Icon(Icons.Default.Send, contentDescription = "发送")
                 }
@@ -1050,6 +1031,8 @@ fun Modifier.scale(scale: Float): Modifier = this.then(
 fun MessageBubbleItem(
     message: ChatMessage,
     isStreamingActive: Boolean,
+    collapseThinkingSignal: Int = 0,
+    isLiveStream: Boolean = false,
     assistantName: String = "AI 助理",
     onSimulateToolOutput: (String, String) -> Unit,
     onDeleteMessage: () -> Unit,
@@ -1060,12 +1043,21 @@ fun MessageBubbleItem(
     val clipboardManager = LocalClipboardManager.current
 
     // Collapse when streaming is done
-    var isThinkingExpanded by remember(message.id) { mutableStateOf(isStreamingActive) }
+    var isThinkingExpanded by remember(message.id) { mutableStateOf(false) }
     var isToolExpanded by remember(message.id) { mutableStateOf(isStreamingActive) }
     var contextMenuExpanded by remember { mutableStateOf(false) }
+    val canExpandThinking = !isStreamingActive
+
+    LaunchedEffect(isStreamingActive) {
+        if (isStreamingActive && isThinkingExpanded) {
+            isThinkingExpanded = false
+        }
+    }
 
     var isEditing by remember(message.id) { mutableStateOf(false) }
-    var editedText by remember(message.content) { mutableStateOf(message.content) }
+    var editedText by remember(message.id) { mutableStateOf(TextFieldValue(message.content, TextRange(message.content.length))) }
+    val focusRequester = remember(message.id) { FocusRequester() }
+    val keyboardController = LocalSoftwareKeyboardController.current
 
     LaunchedEffect(isStreamingActive) {
         if (!isStreamingActive) {
@@ -1073,6 +1065,21 @@ fun MessageBubbleItem(
             isToolExpanded = false
         }
     }
+
+    LaunchedEffect(collapseThinkingSignal) {
+        isThinkingExpanded = false
+    }
+
+    LaunchedEffect(isEditing) {
+        if (isEditing) {
+            focusRequester.requestFocus()
+            keyboardController?.show()
+        }
+    }
+    val thinkingArrowRotation by animateFloatAsState(
+        targetValue = if (isThinkingExpanded) 180f else 0f,
+        label = "ThinkingArrowRotation"
+    )
 
     val bgBrush = if (isUser) {
         Brush.linearGradient(
@@ -1087,6 +1094,21 @@ fun MessageBubbleItem(
             colors = listOf(MaterialTheme.colorScheme.primaryContainer, MaterialTheme.colorScheme.primaryContainer)
         )
     }
+    val isLightPalette = MaterialTheme.colorScheme.surface.luminance() > 0.5f
+    val assistantThemedNearBlack = if (isLightPalette) {
+        Color.Black
+    } else {
+        MaterialTheme.colorScheme.onPrimaryContainer
+    }
+    val messageBodyTextColor = when {
+        isUser -> MaterialTheme.colorScheme.onPrimary
+        isSystem -> MaterialTheme.colorScheme.onSurfaceVariant
+        else -> assistantThemedNearBlack
+    }
+    val thinkingTextColor = when {
+        !isUser && !isSystem -> assistantThemedNearBlack
+        else -> messageBodyTextColor
+    }
 
     val paddingValues = if (isUser) {
         PaddingValues(start = 50.dp, end = 4.dp)
@@ -1100,26 +1122,27 @@ fun MessageBubbleItem(
             .padding(paddingValues),
         contentAlignment = if (isUser) Alignment.CenterEnd else Alignment.CenterStart
     ) {
-        Surface(
-            tonalElevation = if (isUser) 0.dp else 1.dp,
-            border = if (!isUser && !isSystem) BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.15f)) else null,
-            shape = RoundedCornerShape(
-                topStart = 16.dp,
-                topEnd = 16.dp,
-                bottomStart = if (isUser) 16.dp else 2.dp,
-                bottomEnd = if (isUser) 2.dp else 16.dp
-            ),
-            modifier = Modifier.combinedClickable(
-                onClick = {},
-                onLongClick = { contextMenuExpanded = true }
-            )
-        ) {
-            Box(
-                modifier = Modifier
-                    .background(bgBrush)
-                    .padding(12.dp)
+        Box {
+            Surface(
+                tonalElevation = if (isUser) 0.dp else 1.dp,
+                border = if (!isUser && !isSystem) BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.15f)) else null,
+                shape = RoundedCornerShape(
+                    topStart = 16.dp,
+                    topEnd = 16.dp,
+                    bottomStart = if (isUser) 16.dp else 2.dp,
+                    bottomEnd = if (isUser) 2.dp else 16.dp
+                ),
+                modifier = Modifier.combinedClickable(
+                    onClick = {},
+                    onLongClick = { contextMenuExpanded = true }
+                )
             ) {
-                Column {
+                Box(
+                    modifier = Modifier
+                        .background(bgBrush)
+                        .padding(12.dp)
+                ) {
+                    Column {
                     // Display Badge Name/Role
                     Row(
                         modifier = Modifier.padding(bottom = 4.dp),
@@ -1148,12 +1171,13 @@ fun MessageBubbleItem(
                         )
                     }
 
-                    if (isEditing) {
+                        if (isEditing) {
                         OutlinedTextField(
                             value = editedText,
                             onValueChange = { editedText = it },
                             modifier = Modifier
                                 .fillMaxWidth()
+                                .focusRequester(focusRequester)
                                 .padding(vertical = 4.dp),
                             textStyle = MaterialTheme.typography.bodyMedium.copy(
                                 color = if (isUser) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
@@ -1161,6 +1185,7 @@ fun MessageBubbleItem(
                             colors = OutlinedTextFieldDefaults.colors(
                                 focusedTextColor = if (isUser) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
                                 unfocusedTextColor = if (isUser) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
+                                cursorColor = if (isUser) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.primary,
                                 focusedBorderColor = if (isUser) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.primary,
                                 unfocusedBorderColor = if (isUser) MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.5f) else MaterialTheme.colorScheme.outline
                             )
@@ -1172,7 +1197,7 @@ fun MessageBubbleItem(
                             TextButton(
                                 onClick = {
                                     isEditing = false
-                                    editedText = message.content
+                                    editedText = TextFieldValue(message.content, TextRange(message.content.length))
                                 },
                                 colors = ButtonDefaults.textButtonColors(
                                     contentColor = if (isUser) MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.8f) else MaterialTheme.colorScheme.primary
@@ -1184,8 +1209,9 @@ fun MessageBubbleItem(
                             ElevatedButton(
                                 onClick = {
                                     isEditing = false
-                                    if (editedText.isNotBlank() && editedText != message.content) {
-                                        onEditMessage(editedText)
+                                    val newText = editedText.text
+                                    if (newText.isNotBlank() && newText != message.content) {
+                                        onEditMessage(newText)
                                     }
                                 },
                                 colors = ButtonDefaults.elevatedButtonColors(
@@ -1198,16 +1224,36 @@ fun MessageBubbleItem(
                         }
                     } else {
 
+                    val normalizedThinkingContent = remember(message.thinkingContent) {
+                        message.thinkingContent
+                            ?.trim('\n', '\r')
+                            ?.takeIf { it.isNotBlank() }
+                    }
+
                     // Render thinking content block if any
-                    if (!message.thinkingContent.isNullOrBlank()) {
-                        ElevatedCard(
-                            onClick = { isThinkingExpanded = !isThinkingExpanded },
+                    if (!normalizedThinkingContent.isNullOrBlank()) {
+                        val thinkingPreview = remember(normalizedThinkingContent) {
+                            normalizedThinkingContent
+                                .lineSequence()
+                                .map { it.trimEnd() }
+                                .filter { it.isNotBlank() }
+                                .toList()
+                                .takeLast(3)
+                                .joinToString("\n")
+                        }
+
+                        Surface(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(vertical = 4.dp),
-                            colors = CardDefaults.elevatedCardColors(
-                                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
-                            )
+                                .padding(top = 4.dp)
+                                .clip(RoundedCornerShape(10.dp))
+                                .clickable(enabled = canExpandThinking) {
+                                    isThinkingExpanded = !isThinkingExpanded
+                                },
+                            shape = RoundedCornerShape(10.dp),
+                            color = if (isLightPalette) Color.White.copy(alpha = 0.82f) else Color.Black.copy(alpha = 0.20f),
+                            tonalElevation = 0.dp,
+                            shadowElevation = 0.dp
                         ) {
                             Column(modifier = Modifier.padding(8.dp)) {
                                 Row(
@@ -1217,33 +1263,56 @@ fun MessageBubbleItem(
                                     Icon(
                                         Icons.Outlined.Psychology,
                                         contentDescription = null,
-                                        tint = MaterialTheme.colorScheme.tertiary,
+                                        tint = thinkingTextColor.copy(alpha = 0.72f),
                                         modifier = Modifier.size(16.dp)
                                     )
                                     Spacer(modifier = Modifier.width(6.dp))
                                     Text(
-                                        "思考/分析深度链路...",
-                                        style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                                        "思考过程",
+                                        style = MaterialTheme.typography.bodySmall.copy(
+                                            fontFamily = FontFamily.Monospace,
+                                            fontSize = 10.sp
+                                        ),
                                         fontWeight = FontWeight.SemiBold,
-                                        color = MaterialTheme.colorScheme.tertiary,
+                                        color = thinkingTextColor.copy(alpha = 0.92f),
                                         modifier = Modifier.weight(1f)
                                     )
                                     Icon(
-                                        imageVector = if (isThinkingExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                                        imageVector = Icons.Default.ExpandMore,
                                         contentDescription = "展缩",
-                                        modifier = Modifier.size(16.dp),
-                                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                        modifier = Modifier
+                                            .size(16.dp)
+                                            .graphicsLayer { rotationZ = thinkingArrowRotation },
+                                        tint = thinkingTextColor.copy(alpha = if (canExpandThinking) 0.86f else 0.42f)
                                     )
                                 }
-                                if (isThinkingExpanded) {
+                                if (!isThinkingExpanded && thinkingPreview.isNotBlank()) {
                                     Text(
-                                        message.thinkingContent,
+                                        text = thinkingPreview,
                                         style = MaterialTheme.typography.bodySmall.copy(
-                                            fontStyle = FontStyle.Italic,
                                             fontFamily = FontFamily.Monospace,
-                                            lineHeight = 16.sp
+                                            fontSize = 10.sp,
+                                            lineHeight = 14.sp
                                         ),
-                                        color = MaterialTheme.colorScheme.tertiary.copy(alpha = 0.9f),
+                                        maxLines = 3,
+                                        overflow = TextOverflow.Ellipsis,
+                                        color = thinkingTextColor.copy(alpha = 0.84f),
+                                        modifier = Modifier.padding(top = 4.dp)
+                                    )
+                                }
+                                AnimatedVisibility(
+                                    visible = isThinkingExpanded,
+                                    enter = expandVertically() + fadeIn(),
+                                    exit = shrinkVertically() + fadeOut()
+                                ) {
+                                    Text(
+                                        normalizedThinkingContent,
+                                        style = MaterialTheme.typography.bodySmall.copy(
+                                            fontFamily = FontFamily.Monospace,
+                                            fontSize = 10.sp,
+                                            lineHeight = 14.sp
+                                        ),
+                                        color = thinkingTextColor.copy(alpha = 0.9f),
                                         modifier = Modifier.padding(top = 6.dp)
                                     )
                                 }
@@ -1251,84 +1320,107 @@ fun MessageBubbleItem(
                         }
                     }
 
-                    // Render standard or intercepted content
-                    val toolRegex = Regex("""<tool_call name="([^"]+)">([^<]*)</tool_call>""")
-                    val matches = toolRegex.findAll(message.content).toList()
+                    val normalizedBodyContent = remember(message.content, isUser, isSystem) {
+                        if (!isUser && !isSystem) {
+                            message.content.trim('\n', '\r')
+                        } else {
+                            message.content
+                        }
+                    }
 
-                    if (matches.isNotEmpty() && !isUser) {
-                        ElevatedCard(
-                            onClick = { isToolExpanded = !isToolExpanded },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 4.dp),
-                            colors = CardDefaults.elevatedCardColors(
-                                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+                    val bodyTopSpacing = if (!isUser && !isSystem && !normalizedThinkingContent.isNullOrBlank()) 10.dp else 0.dp
+
+                    // Use simplified rendering path for live stream chunks to reduce per-token recomposition cost.
+                    Column(modifier = Modifier.padding(top = bodyTopSpacing)) {
+                        if (isLiveStream) {
+                            Text(
+                                text = normalizedBodyContent,
+                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                                color = messageBodyTextColor
                             )
-                        ) {
-                            Column(modifier = Modifier.padding(8.dp)) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier.fillMaxWidth()
-                                ) {
-                                    Icon(
-                                        Icons.Default.Build,
-                                        contentDescription = null,
-                                        tint = Color(0xFFD97706),
-                                        modifier = Modifier.size(16.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text(
-                                        "拦截工具执行链路... (${matches.size})",
-                                        style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
-                                        fontWeight = FontWeight.SemiBold,
-                                        color = Color(0xFFD97706),
-                                        modifier = Modifier.weight(1f)
-                                    )
-                                    Icon(
-                                        imageVector = if (isToolExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                                        contentDescription = "展缩",
-                                        modifier = Modifier.size(16.dp),
-                                        tint = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                                if (isToolExpanded) {
-                                    Spacer(modifier = Modifier.height(4.dp))
-                                    matches.forEach { match ->
-                                        val toolName = match.groupValues[1]
-                                        val toolArgs = match.groupValues[2]
+                        } else {
+                            // Render standard or intercepted content
+                            val toolRegex = remember { Regex("""<tool_call name="([^"]+)">([^<]*)</tool_call>""") }
+                            val matches = remember(normalizedBodyContent, isUser) {
+                                if (isUser) emptyList() else toolRegex.findAll(normalizedBodyContent).toList()
+                            }
 
-                                        ToolCallInterceptCard(
-                                            toolName = toolName,
-                                            argumentsJson = toolArgs,
-                                            onSimulateResult = { output ->
-                                                onSimulateToolOutput(toolName, output)
-                                            }
+                            if (matches.isNotEmpty() && !isUser) {
+                            ElevatedCard(
+                                onClick = { isToolExpanded = !isToolExpanded },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 4.dp),
+                                colors = CardDefaults.elevatedCardColors(
+                                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+                                )
+                            ) {
+                                Column(modifier = Modifier.padding(8.dp)) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Icon(
+                                            Icons.Default.Build,
+                                            contentDescription = null,
+                                            tint = Color(0xFFD97706),
+                                            modifier = Modifier.size(16.dp)
                                         )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text(
+                                            "拦截工具执行链路... (${matches.size})",
+                                            style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = Color(0xFFD97706),
+                                            modifier = Modifier.weight(1f)
+                                        )
+                                        Icon(
+                                            imageVector = if (isToolExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                                            contentDescription = "展缩",
+                                            modifier = Modifier.size(16.dp),
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                    if (isToolExpanded) {
+                                        Spacer(modifier = Modifier.height(4.dp))
+                                        matches.forEach { match ->
+                                            val toolName = match.groupValues[1]
+                                            val toolArgs = match.groupValues[2]
+
+                                            ToolCallInterceptCard(
+                                                toolName = toolName,
+                                                argumentsJson = toolArgs,
+                                                onSimulateResult = { output ->
+                                                    onSimulateToolOutput(toolName, output)
+                                                }
+                                            )
+                                        }
                                     }
                                 }
                             }
-                        }
 
-                        // Also render any leftover text around matches
-                        val contentWithoutToolCall = message.content.replace(toolRegex, "").trim()
-                        if (contentWithoutToolCall.isNotBlank()) {
-                            Text(
-                                text = renderMarkdown(contentWithoutToolCall),
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                        }
-                    } else {
-                        // Regular Message Text
-                        Text(
-                            text = renderMarkdown(message.content),
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = when {
-                                isUser -> MaterialTheme.colorScheme.onPrimary
-                                isSystem -> MaterialTheme.colorScheme.onSurfaceVariant
-                                else -> MaterialTheme.colorScheme.onPrimaryContainer
+                            // Also render any leftover text around matches
+                            val contentWithoutToolCall = remember(normalizedBodyContent) {
+                                normalizedBodyContent.replace(toolRegex, "").trim()
                             }
-                        )
+                            if (contentWithoutToolCall.isNotBlank()) {
+                                val renderedRemainder = remember(contentWithoutToolCall) { renderMarkdown(contentWithoutToolCall) }
+                                Text(
+                                    text = renderedRemainder,
+                                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                                    color = messageBodyTextColor
+                                )
+                            }
+                            } else {
+                                // Regular Message Text
+                                val renderedContent = remember(normalizedBodyContent) { renderMarkdown(normalizedBodyContent) }
+                                Text(
+                                    text = renderedContent,
+                                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                                    color = messageBodyTextColor
+                                )
+                            }
+                        }
                     }
 
                     // Display metrics metadata badge in Assistant footer
@@ -1348,38 +1440,80 @@ fun MessageBubbleItem(
                     }
                 }
             }
-        }
-
-        // Long press menu
-        DropdownMenu(
-            expanded = contextMenuExpanded,
-            onDismissRequest = { contextMenuExpanded = false }
-        ) {
-            if (isUser) {
+            }
+            // Long press menu anchored to message bubble
+            DropdownMenu(
+                expanded = contextMenuExpanded,
+                onDismissRequest = { contextMenuExpanded = false }
+            ) {
+                if (isUser) {
+                    DropdownMenuItem(
+                        text = { Text("编辑该消息") },
+                        onClick = {
+                            editedText = TextFieldValue(message.content, TextRange(message.content.length))
+                            isEditing = true
+                            contextMenuExpanded = false
+                        }
+                    )
+                }
                 DropdownMenuItem(
-                    text = { Text("编辑该消息") },
+                    text = { Text("复制文本内容") },
                     onClick = {
-                        isEditing = true
+                        clipboardManager.setText(AnnotatedString(message.content))
                         contextMenuExpanded = false
                     }
                 )
             }
-            DropdownMenuItem(
-                text = { Text("复制文本内容") },
-                onClick = {
-                    clipboardManager.setText(AnnotatedString(message.content))
-                    contextMenuExpanded = false
-                }
-            )
-            DropdownMenuItem(
-                text = { Text("删除该气泡") },
-                onClick = {
-                    onDeleteMessage()
-                    contextMenuExpanded = false
-                }
-            )
         }
     }
+}
+
+@Composable
+private fun LiveStreamingMessageItem(
+    viewModel: MainViewModel,
+    sessionId: Long?,
+    isStreamingActive: Boolean,
+    collapseThinkingSignal: Int,
+    assistantName: String,
+    onSimulateToolOutput: (String, String) -> Unit,
+    onDeleteMessage: () -> Unit,
+    onEditMessage: (String) -> Unit
+) {
+    val currentStreamContent by viewModel.currentStreamContent.collectAsStateWithLifecycle()
+    val currentStreamThinking by viewModel.currentStreamThinking.collectAsStateWithLifecycle()
+    var displayContent by remember { mutableStateOf("") }
+    var displayThinking by remember { mutableStateOf("") }
+
+    // Keep true streaming feel while limiting redraw frequency to reduce visual jitter.
+    LaunchedEffect(Unit) {
+        displayContent = currentStreamContent
+        displayThinking = currentStreamThinking
+        snapshotFlow { currentStreamContent to currentStreamThinking }
+            .sample(33L)
+            .collect { (content, thinking) ->
+                displayContent = content
+                displayThinking = thinking
+            }
+    }
+
+    if (displayContent.isBlank() && displayThinking.isBlank()) return
+
+    MessageBubbleItem(
+        message = ChatMessage(
+            id = -1L,
+            sessionId = sessionId ?: -1L,
+            role = "assistant",
+            content = displayContent,
+            thinkingContent = displayThinking.takeIf { it.isNotBlank() }
+        ),
+        isStreamingActive = isStreamingActive,
+        collapseThinkingSignal = collapseThinkingSignal,
+        isLiveStream = true,
+        assistantName = assistantName,
+        onSimulateToolOutput = onSimulateToolOutput,
+        onDeleteMessage = onDeleteMessage,
+        onEditMessage = onEditMessage
+    )
 }
 
 // Custom Markdown styler mapping
@@ -2429,12 +2563,12 @@ fun <T> LazyVerticalGridInside(
     modifier: Modifier = Modifier,
     content: @Composable (T) -> Unit
 ) {
-    Column(
-        modifier = modifier.verticalScroll(rememberScrollState()),
+    LazyColumn(
+        modifier = modifier,
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        items.forEach { item ->
-            content(item)
+        items(items.size) { index ->
+            content(items[index])
         }
     }
 }
@@ -2597,7 +2731,7 @@ fun AgentConfigCard(
                                 .padding(horizontal = 4.dp, vertical = 2.dp)
                         ) {
                             Text(
-                                "${activeMdCount} md files activated",
+                                "${activeMdCount} md files",
                                 style = androidx.compose.ui.text.TextStyle(fontSize = 10.sp, fontWeight = FontWeight.Bold),
                                 color = MaterialTheme.colorScheme.onPrimaryContainer
                             )
@@ -2608,7 +2742,7 @@ fun AgentConfigCard(
                                 .padding(horizontal = 4.dp, vertical = 2.dp)
                         ) {
                             Text(
-                                "${activatedToolsCount} tools activated",
+                                "${activatedToolsCount} tools",
                                 style = androidx.compose.ui.text.TextStyle(fontSize = 10.sp, fontWeight = FontWeight.Bold),
                                 color = MaterialTheme.colorScheme.onSecondaryContainer
                             )
@@ -2657,17 +2791,25 @@ fun SettingsScreen(viewModel: MainViewModel) {
     val isTesting by viewModel.isTestingConnection.collectAsStateWithLifecycle()
     val modelsList by viewModel.modelsList.collectAsStateWithLifecycle()
     val testResultMessage by viewModel.testResultMessage.collectAsStateWithLifecycle()
-    val allMessagesHistory by viewModel.allSessionsFlow.collectAsStateWithLifecycle(initialValue = emptyList())
     val careerStats by viewModel.careerStatsFlow.collectAsStateWithLifecycle()
 
     // Internal edits
     var editedUrl by remember { mutableStateOf(activeSettings.baseUrl) }
     var editedKey by remember { mutableStateOf(activeSettings.apiKey) }
     var isApiKeyMasked by remember { mutableStateOf(true) }
+    var draftTemperature by remember { mutableStateOf(activeSettings.temperature) }
+    var draftTopP by remember { mutableStateOf(activeSettings.topP) }
+    var draftMaxTokens by remember { mutableStateOf(activeSettings.maxTokens.coerceIn(1, 20000)) }
 
     LaunchedEffect(activeSettings.baseUrl, activeSettings.apiKey) {
         editedUrl = activeSettings.baseUrl
         editedKey = activeSettings.apiKey
+    }
+
+    LaunchedEffect(activeSettings.temperature, activeSettings.topP, activeSettings.maxTokens) {
+        draftTemperature = activeSettings.temperature
+        draftTopP = activeSettings.topP
+        draftMaxTokens = activeSettings.maxTokens.coerceIn(1, 20000)
     }
 
     Column(
@@ -2706,7 +2848,6 @@ fun SettingsScreen(viewModel: MainViewModel) {
                     value = editedUrl,
                     onValueChange = {
                         editedUrl = it
-                        viewModel.updateBaseUrl(it)
                     },
                     label = { Text("API 端点 (Base URL)") },
                     modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
@@ -2718,7 +2859,6 @@ fun SettingsScreen(viewModel: MainViewModel) {
                     value = editedKey,
                     onValueChange = {
                         editedKey = it
-                        viewModel.updateApiKey(it)
                     },
                     label = { Text("API 凭证 (API Key)") },
                     modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
@@ -2735,7 +2875,10 @@ fun SettingsScreen(viewModel: MainViewModel) {
                 )
 
                 Button(
-                    onClick = { viewModel.fetchAvailableModels() },
+                    onClick = {
+                        viewModel.updateApiConfig(editedUrl, editedKey)
+                        viewModel.fetchAvailableModels(editedUrl, editedKey)
+                    },
                     modifier = Modifier.fillMaxWidth(),
                     enabled = !isTesting
                 ) {
@@ -2819,11 +2962,14 @@ fun SettingsScreen(viewModel: MainViewModel) {
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("Temperature: ${String.format("%.2f", activeSettings.temperature)}", style = MaterialTheme.typography.bodyMedium)
+                    Text("Temperature: ${String.format("%.2f", draftTemperature)}", style = MaterialTheme.typography.bodyMedium)
                 }
                 Slider(
-                    value = activeSettings.temperature,
-                    onValueChange = { viewModel.updateHyperparams(it, activeSettings.maxTokens, activeSettings.topP) },
+                    value = draftTemperature,
+                    onValueChange = { draftTemperature = it },
+                    onValueChangeFinished = {
+                        viewModel.updateHyperparams(draftTemperature, draftMaxTokens, draftTopP)
+                    },
                     valueRange = 0.0f..1.5f,
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -2836,11 +2982,14 @@ fun SettingsScreen(viewModel: MainViewModel) {
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("Top P: ${String.format("%.2f", activeSettings.topP)}", style = MaterialTheme.typography.bodyMedium)
+                    Text("Top P: ${String.format("%.2f", draftTopP)}", style = MaterialTheme.typography.bodyMedium)
                 }
                 Slider(
-                    value = activeSettings.topP,
-                    onValueChange = { viewModel.updateHyperparams(activeSettings.temperature, activeSettings.maxTokens, it) },
+                    value = draftTopP,
+                    onValueChange = { draftTopP = it },
+                    onValueChangeFinished = {
+                        viewModel.updateHyperparams(draftTemperature, draftMaxTokens, draftTopP)
+                    },
                     valueRange = 0.0f..1.0f,
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -2853,12 +3002,15 @@ fun SettingsScreen(viewModel: MainViewModel) {
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("Max Tokens: ${activeSettings.maxTokens}", style = MaterialTheme.typography.bodyMedium)
+                    Text("Max Tokens: ${draftMaxTokens}", style = MaterialTheme.typography.bodyMedium)
                 }
                 Slider(
-                    value = activeSettings.maxTokens.toFloat(),
-                    onValueChange = { viewModel.updateHyperparams(activeSettings.temperature, it.toInt(), activeSettings.topP) },
-                    valueRange = 256.0f..4096.0f,
+                    value = draftMaxTokens.toFloat(),
+                    onValueChange = { draftMaxTokens = it.toInt().coerceIn(1, 20000) },
+                    onValueChangeFinished = {
+                        viewModel.updateHyperparams(draftTemperature, draftMaxTokens, draftTopP)
+                    },
+                    valueRange = 1.0f..20000.0f,
                     modifier = Modifier.fillMaxWidth()
                 )
             }
@@ -3029,106 +3181,8 @@ fun SettingsScreen(viewModel: MainViewModel) {
             }
         }
 
-        // Metrics Visual Chart (Custom Canvas performance graphs)
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(16.dp),
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.12f)),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-        ) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Text(
-                    "Benchmark",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.padding(bottom = 12.dp)
-                )
-
-                // Visual Analytics via Canvas (drawing visual benchmarks comparing models throughput speed e.g. tokens per second)
-                val primaryColor = MaterialTheme.colorScheme.primary
-                val secondaryColor = MaterialTheme.colorScheme.secondary
-                val textOnSurface = MaterialTheme.colorScheme.onSurface
-
-                Text(
-                    "大模型平均输出速度基准 (Tokens / Sec)",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(bottom = 10.dp)
-                )
-
-                Canvas(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(160.dp)
-                ) {
-                    val width = size.width
-                    val height = size.height
-
-                    // Draw Grid lines
-                    for (x in 1..4) {
-                        val gap = height / 5
-                        drawLine(
-                            color = textOnSurface.copy(alpha = 0.08f),
-                            start = Offset(0f, gap * x),
-                            end = Offset(width, gap * x),
-                            strokeWidth = 2f
-                        )
-                    }
-
-                    // Simulated models tokens Benchmark: gpt-4o-mini (55 tps), reasoning model (32 tps), local model (70 tps), other (20 tps)
-                    val benchmarks = listOf(
-                        BenchmarkItem("4o-mini", 55f),
-                        BenchmarkItem("DeepSeek", 32f),
-                        BenchmarkItem("Gemini", 68f),
-                        BenchmarkItem("Custom", 22f)
-                    )
-
-                    val maxVal = 80f
-                    val barSpacing = width / benchmarks.size
-                    val barWidth = barSpacing * 0.5f
-
-                    benchmarks.forEachIndexed { i, item ->
-                        val barHeight = (item.value / maxVal) * (height - 30.dp.toPx())
-                        val topLeftX = (barSpacing * i) + (barSpacing * 0.25f)
-                        val topLeftY = height - barHeight - 20.dp.toPx()
-
-                        // Draw solid visual bars with rounded visual borders
-                        drawRoundRect(
-                            color = if (i == 2) primaryColor else secondaryColor.copy(alpha = 0.7f),
-                            topLeft = Offset(topLeftX, topLeftY),
-                            size = Size(barWidth, barHeight),
-                            cornerRadius = CornerRadius(8f, 8f)
-                        )
-                    }
-                }
-
-                // Benchmarks label legends
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 4.dp),
-                    horizontalArrangement = Arrangement.SpaceAround
-                ) {
-                    Text("GPT-4o (55 t/s)", style = MaterialTheme.typography.bodySmall.copy(fontSize = 10.sp), fontWeight = FontWeight.Bold)
-                    Text("DeepSeek (32 t/s)", style = MaterialTheme.typography.bodySmall.copy(fontSize = 10.sp), fontWeight = FontWeight.Bold)
-                    Text("Gemini (68 t/s)", style = MaterialTheme.typography.bodySmall.copy(fontSize = 10.sp), fontWeight = FontWeight.Bold)
-                    Text("Custom (22 t/s)", style = MaterialTheme.typography.bodySmall.copy(fontSize = 10.sp), fontWeight = FontWeight.Bold)
-                }
-
-                Spacer(modifier = Modifier.height(14.dp))
-
-                Text(
-                    "诊断提示: 优化代理吞吐量时，流式参数 (isStreaming) 能显著抹消首字传输延迟感知，最大代币限制将决定上下文窗口保留厚度。",
-                    style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp, fontStyle = FontStyle.Italic),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        }
     }
 }
-
-data class BenchmarkItem(val name: String, val value: Float)
 
 @Composable
 fun StatItemCard(

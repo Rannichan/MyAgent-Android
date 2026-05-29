@@ -6,6 +6,17 @@ plugins {
   alias(libs.plugins.secrets)
 }
 
+import java.util.Base64
+
+val debugKeystoreFile = rootProject.file("debug.keystore")
+val debugKeystoreBase64File = rootProject.file("debug.keystore.base64")
+
+// Recreate debug.keystore from the checked-in base64 payload when needed.
+if (!debugKeystoreFile.exists() && debugKeystoreBase64File.exists()) {
+  val encoded = debugKeystoreBase64File.readText().replace("\\s+".toRegex(), "")
+  debugKeystoreFile.writeBytes(Base64.getDecoder().decode(encoded))
+}
+
 android {
   namespace = "com.example"
   compileSdk { version = release(36) { minorApiLevel = 1 } }
@@ -29,7 +40,7 @@ android {
       keyPassword = System.getenv("KEY_PASSWORD")
     }
     create("debugConfig") {
-      storeFile = file("${rootDir}/debug.keystore")
+      storeFile = debugKeystoreFile
       storePassword = "android"
       keyAlias = "androiddebugkey"
       keyPassword = "android"

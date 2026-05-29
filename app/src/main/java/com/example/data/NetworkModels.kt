@@ -15,7 +15,26 @@ data class ChatCompletionRequest(
     val temperature: Float,
     val top_p: Float? = null,
     val max_tokens: Int?,
-    val stream: Boolean
+    val stream: Boolean,
+    val stream_options: StreamOptions? = null,
+    val enable_thinking: Boolean? = null,
+    val extra_body: ExtraBody? = null
+)
+
+@JsonClass(generateAdapter = true)
+data class ExtraBody(
+    val top_k: Int? = null,
+    val chat_template_kwargs: ChatTemplateKwargs? = null
+)
+
+@JsonClass(generateAdapter = true)
+data class ChatTemplateKwargs(
+    val enable_thinking: Boolean? = null
+)
+
+@JsonClass(generateAdapter = true)
+data class StreamOptions(
+    val include_usage: Boolean = true
 )
 
 @JsonClass(generateAdapter = true)
