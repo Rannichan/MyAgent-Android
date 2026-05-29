@@ -32,6 +32,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -181,33 +182,34 @@ fun MainAppContainer(viewModel: MainViewModel) {
                 }
             }
         ) { innerPadding ->
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(
-                        top = if (currentTab == "chat") 0.dp else innerPadding.calculateTopPadding(),
-                        bottom = if (currentTab == "chat") 0.dp else innerPadding.calculateBottomPadding()
-                    )
-            ) {
-                AnimatedContent(
-                    targetState = currentTab,
-                    transitionSpec = {
-                        val tabOrder = mapOf("chat" to 0, "personas" to 1, "settings" to 2)
-                        val initialIndex = tabOrder[initialState] ?: 0
-                        val targetIndex = tabOrder[targetState] ?: 0
-                        val direction = if (targetIndex >= initialIndex) 1 else -1
+            AnimatedContent(
+                targetState = currentTab,
+                transitionSpec = {
+                    val tabOrder = mapOf("chat" to 0, "personas" to 1, "settings" to 2)
+                    val initialIndex = tabOrder[initialState] ?: 0
+                    val targetIndex = tabOrder[targetState] ?: 0
+                    val direction = if (targetIndex >= initialIndex) 1 else -1
 
-                        (slideInHorizontally(
-                            initialOffsetX = { fullWidth -> (fullWidth / 3) * direction },
-                            animationSpec = spring()
-                        ) + fadeIn(animationSpec = spring())) togetherWith
-                                (slideOutHorizontally(
-                                    targetOffsetX = { fullWidth -> (-fullWidth / 3) * direction },
-                                    animationSpec = spring()
-                                ) + fadeOut(animationSpec = spring()))
-                    },
-                    label = "TabTransition"
-                ) { targetTab ->
+                    slideInHorizontally(
+                        initialOffsetX = { fullWidth -> fullWidth * direction },
+                        animationSpec = spring()
+                    ) togetherWith
+                            slideOutHorizontally(
+                                targetOffsetX = { fullWidth -> -fullWidth * direction },
+                                animationSpec = spring()
+                            )
+                },
+                label = "TabTransition",
+                modifier = Modifier.fillMaxSize()
+            ) { targetTab ->
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(
+                            top = if (targetTab == "chat") 0.dp else innerPadding.calculateTopPadding(),
+                            bottom = if (targetTab == "chat") 0.dp else innerPadding.calculateBottomPadding()
+                        )
+                ) {
                     when (targetTab) {
                         "chat" -> ChatScreen(
                             viewModel = viewModel,
@@ -625,6 +627,7 @@ fun ChatScreen(
                     val density = LocalDensity.current
                     val keyboardBottomPadding = with(density) { WindowInsets.ime.getBottom(density).toDp() }
                     val listState = rememberLazyListState()
+                    val coroutineScope = rememberCoroutineScope()
                     var lastAutoScrolledSessionId by remember { mutableStateOf<Long?>(null) }
                     var collapseThinkingSignal by remember { mutableStateOf(0) }
                     var lastHandledUserMessageId by remember(currentSessionId) { mutableStateOf<Long?>(null) }
@@ -720,7 +723,14 @@ fun ChatScreen(
                     ChatInputPanel(
                         viewModel = viewModel,
                         isStreaming = isStreaming,
-                        bottomPadding = bottomPadding
+                        bottomPadding = bottomPadding,
+                        onInputFocused = {
+                            coroutineScope.launch {
+                                if (activeMessages.isNotEmpty()) {
+                                    listState.scrollToItem(activeMessages.lastIndex)
+                                }
+                            }
+                        }
                     )
                 }
             }
@@ -961,7 +971,8 @@ fun ChatScreen(
 fun ChatInputPanel(
     viewModel: MainViewModel,
     isStreaming: Boolean,
-    bottomPadding: androidx.compose.ui.unit.Dp = 0.dp
+    bottomPadding: androidx.compose.ui.unit.Dp = 0.dp,
+    onInputFocused: () -> Unit = {}
 ) {
     val settings by viewModel.settingsFlow.collectAsStateWithLifecycle(initialValue = AppSettings())
     val activeSettings = settings ?: AppSettings()
@@ -1031,7 +1042,12 @@ fun ChatInputPanel(
                 onValueChange = { inputStr = it },
                 placeholder = { Text("说点什么...") },
                 modifier = Modifier
-                    .weight(1f),
+                    .weight(1f)
+                    .onFocusChanged { focusState ->
+                        if (focusState.isFocused) {
+                            onInputFocused()
+                        }
+                    },
                 maxLines = 4,
                 shape = RoundedCornerShape(12.dp),
                 keyboardOptions = KeyboardOptions(
@@ -1237,6 +1253,8 @@ fun MessageBubbleItem(
                                 color = if (isUser) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
                             ),
                             colors = OutlinedTextFieldDefaults.colors(
+                                focusedContainerColor = Color.Transparent,
+                                unfocusedContainerColor = Color.Transparent,
                                 focusedTextColor = if (isUser) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
                                 unfocusedTextColor = if (isUser) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
                                 cursorColor = if (isUser) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.primary,
@@ -3129,17 +3147,12 @@ fun SettingsScreen(viewModel: MainViewModel) {
                     singleLine = true
                 )
 
-                Text(
-                    "API 凭证 (API Key)",
-                    style = MaterialTheme.typography.bodySmall,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(bottom = 6.dp)
-                )
                 OutlinedTextField(
                     value = editedKey,
                     onValueChange = {
                         editedKey = it
                     },
+                    label = { Text("API 凭证 (API Key)") },
                     placeholder = { Text("请输入 API Key") },
                     modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
                     visualTransformation = if (isApiKeyMasked) PasswordVisualTransformation() else VisualTransformation.None,
