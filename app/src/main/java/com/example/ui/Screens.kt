@@ -6,7 +6,9 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.text.selection.LocalTextSelectionColors
 import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.text.selection.TextSelectionColors
 import com.example.ui.theme.AgentHubTheme
 import androidx.activity.compose.BackHandler
 import androidx.compose.ui.graphics.graphicsLayer
@@ -237,6 +239,8 @@ fun ChatScreen(
     val npcs by viewModel.allNpcsFlow.collectAsStateWithLifecycle(initialValue = emptyList())
     val agents by viewModel.allAgentsFlow.collectAsStateWithLifecycle(initialValue = emptyList())
     val isStreaming by viewModel.isStreamingActive.collectAsStateWithLifecycle()
+    val currentStreamContent by viewModel.currentStreamContent.collectAsStateWithLifecycle()
+    val currentStreamThinking by viewModel.currentStreamThinking.collectAsStateWithLifecycle()
 
     var searchQuery by remember { mutableStateOf("") }
     var isSearching by remember { mutableStateOf(false) }
@@ -659,6 +663,18 @@ fun ChatScreen(
                         if (activeMessages.isNotEmpty() && shouldStickToBottom && !isStreaming) {
                             listState.scrollToItem(activeMessages.lastIndex)
                         }
+                    }
+
+                    LaunchedEffect(isStreaming, shouldStickToBottom, activeMessages.size) {
+                        if (!isStreaming || !shouldStickToBottom) return@LaunchedEffect
+                        snapshotFlow { currentStreamContent.length to currentStreamThinking.length }
+                            .sample(33L)
+                            .collect {
+                                val targetIndex = activeMessages.lastIndex + 1
+                                if (targetIndex >= 0) {
+                                    listState.scrollToItem(targetIndex)
+                                }
+                            }
                     }
 
                     LaunchedEffect(keyboardBottomPadding, shouldStickToBottom, activeMessages.size, isStreaming) {
@@ -1242,26 +1258,37 @@ fun MessageBubbleItem(
                     }
 
                         if (isEditing) {
-                        OutlinedTextField(
-                            value = editedText,
-                            onValueChange = { editedText = it },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .focusRequester(focusRequester)
-                                .padding(vertical = 4.dp),
-                            textStyle = MaterialTheme.typography.bodyMedium.copy(
-                                color = if (isUser) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
-                            ),
-                            colors = OutlinedTextFieldDefaults.colors(
-                                focusedContainerColor = Color.Transparent,
-                                unfocusedContainerColor = Color.Transparent,
-                                focusedTextColor = if (isUser) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
-                                unfocusedTextColor = if (isUser) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
-                                cursorColor = if (isUser) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.primary,
-                                focusedBorderColor = if (isUser) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.primary,
-                                unfocusedBorderColor = if (isUser) MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.5f) else MaterialTheme.colorScheme.outline
+                        CompositionLocalProvider(
+                            LocalTextSelectionColors provides TextSelectionColors(
+                                handleColor = Color.Transparent,
+                                backgroundColor = if (isUser) {
+                                    MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.28f)
+                                } else {
+                                    MaterialTheme.colorScheme.primary.copy(alpha = 0.24f)
+                                }
                             )
-                        )
+                        ) {
+                            OutlinedTextField(
+                                value = editedText,
+                                onValueChange = { editedText = it },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .focusRequester(focusRequester)
+                                    .padding(vertical = 4.dp),
+                                textStyle = MaterialTheme.typography.bodyMedium.copy(
+                                    color = if (isUser) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
+                                ),
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedContainerColor = Color.Transparent,
+                                    unfocusedContainerColor = Color.Transparent,
+                                    focusedTextColor = if (isUser) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
+                                    unfocusedTextColor = if (isUser) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
+                                    cursorColor = if (isUser) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.primary,
+                                    focusedBorderColor = if (isUser) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.primary,
+                                    unfocusedBorderColor = if (isUser) MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.5f) else MaterialTheme.colorScheme.outline
+                                )
+                            )
+                        }
                         Row(
                             modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
                             horizontalArrangement = Arrangement.End
@@ -3078,8 +3105,8 @@ fun AgentConfigCard(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(viewModel: MainViewModel) {
-    val settings by viewModel.settingsFlow.collectAsStateWithLifecycle(initialValue = AppSettings())
-    val activeSettings = settings ?: AppSettings()
+    val settings by viewModel.settingsFlow.collectAsStateWithLifecycle(initialValue = null)
+    val activeSettings = settings ?: return
     val isTesting by viewModel.isTestingConnection.collectAsStateWithLifecycle()
     val modelsList by viewModel.modelsList.collectAsStateWithLifecycle()
     val testResultMessage by viewModel.testResultMessage.collectAsStateWithLifecycle()
