@@ -153,6 +153,10 @@ class AppRepository(context: Context) {
         return openAiService.streamChatCompletions(baseUrl, apiKey, request)
     }
 
+    fun serializeChatCompletionRequest(request: ChatCompletionRequest): String {
+        return openAiService.serializeChatCompletionRequest(request)
+    }
+
     // McpTool methods
     suspend fun insertMcpTool(tool: McpTool): Long {
         return mcpToolDao.insertMcpTool(tool)

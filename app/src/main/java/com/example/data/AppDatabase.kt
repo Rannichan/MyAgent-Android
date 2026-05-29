@@ -9,6 +9,8 @@ import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import androidx.room.Update
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.flow.Flow
 
 @Dao
@@ -122,7 +124,7 @@ interface McpToolDao {
         ChatMessage::class,
         McpTool::class
     ],
-    version = 3,
+    version = 4,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -134,6 +136,15 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun mcpToolDao(): McpToolDao
 
     companion object {
+        private val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL("ALTER TABLE npcs ADD COLUMN avatarUri TEXT")
+                database.execSQL("ALTER TABLE agents ADD COLUMN avatarUri TEXT")
+                database.execSQL("ALTER TABLE messages ADD COLUMN rawRequestBody TEXT")
+                database.execSQL("ALTER TABLE messages ADD COLUMN rawResponseBody TEXT")
+            }
+        }
+
         @Volatile
         private var INSTANCE: AppDatabase? = null
 
@@ -144,6 +155,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "agent_hub_database"
                 )
+                    .addMigrations(MIGRATION_3_4)
                     .fallbackToDestructiveMigration()
                     .build()
                 INSTANCE = instance
