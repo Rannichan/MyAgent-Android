@@ -26,6 +26,18 @@ interface SettingsDao {
 }
 
 @Dao
+interface ApiEndpointHistoryDao {
+    @Query("SELECT * FROM api_endpoint_history ORDER BY createdAt DESC")
+    fun getAllFlow(): Flow<List<ApiEndpointHistory>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertHistory(entry: ApiEndpointHistory)
+
+    @Query("DELETE FROM api_endpoint_history WHERE url = :url")
+    suspend fun deleteByUrl(url: String)
+}
+
+@Dao
 interface NpcDao {
     @Query("SELECT * FROM npcs ORDER BY createdAt DESC")
     fun getAllNpcsFlow(): Flow<List<NpcCharacter>>
@@ -84,6 +96,9 @@ interface MessageDao {
     @Query("SELECT * FROM messages WHERE sessionId = :sessionId ORDER BY timestamp ASC")
     suspend fun getMessagesForSession(sessionId: Long): List<ChatMessage>
 
+    @Query("SELECT * FROM messages WHERE id = :id LIMIT 1")
+    suspend fun getMessageById(id: Long): ChatMessage?
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertMessage(message: ChatMessage): Long
 
@@ -118,17 +133,19 @@ interface McpToolDao {
 @Database(
     entities = [
         AppSettings::class,
+        ApiEndpointHistory::class,
         NpcCharacter::class,
         AgentConfig::class,
         ChatSession::class,
         ChatMessage::class,
         McpTool::class
     ],
-    version = 4,
+    version = 5,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
     abstract fun settingsDao(): SettingsDao
+    abstract fun apiEndpointHistoryDao(): ApiEndpointHistoryDao
     abstract fun npcDao(): NpcDao
     abstract fun agentDao(): AgentDao
     abstract fun sessionDao(): SessionDao
@@ -145,6 +162,19 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS api_endpoint_history (
+                        url TEXT NOT NULL PRIMARY KEY,
+                        createdAt INTEGER NOT NULL
+                    )
+                    """.trimIndent()
+                )
+            }
+        }
+
         @Volatile
         private var INSTANCE: AppDatabase? = null
 
@@ -155,7 +185,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "agent_hub_database"
                 )
-                    .addMigrations(MIGRATION_3_4)
+                    .addMigrations(MIGRATION_3_4, MIGRATION_4_5)
                     .fallbackToDestructiveMigration()
                     .build()
                 INSTANCE = instance

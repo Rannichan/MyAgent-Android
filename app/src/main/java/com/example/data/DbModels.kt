@@ -20,6 +20,12 @@ data class AppSettings(
     val statsResetTime: Long = 0L
 )
 
+@Entity(tableName = "api_endpoint_history")
+data class ApiEndpointHistory(
+    @PrimaryKey val url: String,
+    val createdAt: Long = System.currentTimeMillis()
+)
+
 @Entity(tableName = "npcs")
 data class NpcCharacter(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,

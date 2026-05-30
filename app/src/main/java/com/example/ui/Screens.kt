@@ -77,6 +77,8 @@ val AvatarColors = listOf(
     Color(0xFFC2185B), // 5: Rose
 )
 
+private fun randomAvatarColorOrdinal(): Int = (0..AvatarColors.lastIndex).random()
+
 private data class AvatarUiModel(
     val name: String,
     val avatarColorOrdinal: Int,
@@ -239,6 +241,7 @@ fun ChatScreen(
     val npcs by viewModel.allNpcsFlow.collectAsStateWithLifecycle(initialValue = emptyList())
     val agents by viewModel.allAgentsFlow.collectAsStateWithLifecycle(initialValue = emptyList())
     val isStreaming by viewModel.isStreamingActive.collectAsStateWithLifecycle()
+    val streamingSessionId by viewModel.streamingSessionId.collectAsStateWithLifecycle()
     val currentStreamContent by viewModel.currentStreamContent.collectAsStateWithLifecycle()
     val currentStreamThinking by viewModel.currentStreamThinking.collectAsStateWithLifecycle()
 
@@ -702,7 +705,7 @@ fun ChatScreen(
                             items(activeMessages, key = { it.id }, contentType = { "message" }) { message ->
                                 MessageBubbleItem(
                                     message = message,
-                                    isStreamingActive = isStreaming,
+                                    isStreamingActive = isStreaming && streamingSessionId == currentSessionId,
                                     collapseThinkingSignal = collapseThinkingSignal,
                                     assistantName = displayTitle,
                                     onSimulateToolOutput = { toolName, output ->
@@ -715,7 +718,7 @@ fun ChatScreen(
                                 )
                             }
 
-                            if (isStreaming) {
+                            if (isStreaming && streamingSessionId == currentSessionId) {
                                 item(key = "live-streaming-message") {
                                     LiveStreamingMessageItem(
                                         viewModel = viewModel,
@@ -827,7 +830,7 @@ fun ChatScreen(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        listOf("NPC" to "NPC人设", "AGENT" to "Agent").forEach { (v, l) ->
+                        listOf("NPC" to "NPC", "AGENT" to "Agent").forEach { (v, l) ->
                             FilterChip(
                                 selected = modeChoice == v,
                                 onClick = {
@@ -2085,7 +2088,7 @@ fun PersonaManagementScreen(viewModel: MainViewModel, onNavigateToTab: (String) 
                             .align(Alignment.BottomEnd)
                             .padding(16.dp)
                     ) {
-                        Icon(Icons.Default.NoteAdd, contentDescription = "配置系统规格文档")
+                        Icon(Icons.Default.Add, contentDescription = "新增")
                     }
                 }
             }
@@ -2145,7 +2148,7 @@ fun PersonaManagementScreen(viewModel: MainViewModel, onNavigateToTab: (String) 
                 var nameText by remember(originalNpc) { mutableStateOf(originalNpc?.name ?: "") }
                 var promptText by remember(originalNpc) { mutableStateOf(originalNpc?.prompt ?: "") }
                 var greetingText by remember(originalNpc) { mutableStateOf(originalNpc?.greeting ?: "") }
-                var colorIndexSelected by remember(originalNpc) { mutableStateOf(originalNpc?.avatarColorOrdinal ?: 0) }
+                val randomColorIndex = remember(originalNpc) { randomAvatarColorOrdinal() }
                 var avatarUriText by remember(originalNpc) { mutableStateOf(originalNpc?.avatarUri) }
                 val avatarPickerLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
                     if (uri != null) {
@@ -2190,7 +2193,7 @@ fun PersonaManagementScreen(viewModel: MainViewModel, onNavigateToTab: (String) 
                     OutlinedTextField(
                         value = promptText,
                         onValueChange = { promptText = it },
-                        label = { Text("System Prompt (行动纲领)") },
+                        label = { Text("人设细节（System Prompt）") },
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(150.dp)
@@ -2213,12 +2216,12 @@ fun PersonaManagementScreen(viewModel: MainViewModel, onNavigateToTab: (String) 
                     ) {
                         EntityAvatar(
                             name = nameText.ifBlank { "NPC" },
-                            avatarColorOrdinal = colorIndexSelected,
+                            avatarColorOrdinal = randomColorIndex,
                             avatarUri = avatarUriText,
                             modifier = Modifier.size(56.dp)
                         )
-                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            OutlinedButton(onClick = { avatarPickerLauncher.launch(arrayOf("image/*")) }) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                            TextButton(onClick = { avatarPickerLauncher.launch(arrayOf("image/*")) }) {
                                 Icon(Icons.Default.Image, contentDescription = null, modifier = Modifier.size(16.dp))
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Text(if (avatarUriText.isNullOrBlank()) "上传头像" else "更换头像")
@@ -2228,34 +2231,6 @@ fun PersonaManagementScreen(viewModel: MainViewModel, onNavigateToTab: (String) 
                                     Text("移除头像")
                                 }
                             }
-                        }
-                    }
-
-                    Text(
-                        "选择标志化代表色:",
-                        style = MaterialTheme.typography.bodySmall,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(bottom = 6.dp)
-                    )
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        AvatarColors.forEachIndexed { idx, col ->
-                            Box(
-                                modifier = Modifier
-                                    .size(34.dp)
-                                    .clip(CircleShape)
-                                    .background(col)
-                                    .clickable { colorIndexSelected = idx }
-                                    .border(
-                                        width = if (colorIndexSelected == idx) 3.dp else 0.dp,
-                                        color = if (colorIndexSelected == idx) MaterialTheme.colorScheme.onBackground else Color.Transparent,
-                                        shape = CircleShape
-                                    )
-                            )
                         }
                     }
 
@@ -2281,7 +2256,7 @@ fun PersonaManagementScreen(viewModel: MainViewModel, onNavigateToTab: (String) 
                                                 name = nameText,
                                                 prompt = promptText,
                                                 greeting = greetingText.ifBlank { "你好！我们准备开始啦" },
-                                                avatarColorOrdinal = colorIndexSelected,
+                                                avatarColorOrdinal = randomColorIndex,
                                                 avatarUri = avatarUriText
                                             )
                                         )
@@ -2292,7 +2267,7 @@ fun PersonaManagementScreen(viewModel: MainViewModel, onNavigateToTab: (String) 
                                                 name = nameText,
                                                 prompt = promptText,
                                                 greeting = greetingText.ifBlank { "你好！我们准备开始啦" },
-                                                avatarColorOrdinal = colorIndexSelected,
+                                                avatarColorOrdinal = randomColorIndex,
                                                 avatarUri = avatarUriText
                                             )
                                         )
@@ -2347,7 +2322,7 @@ fun PersonaManagementScreen(viewModel: MainViewModel, onNavigateToTab: (String) 
                     mutableStateOf(namesSet)
                 }
 
-                var colorIndexSelected by remember(originalAgent) { mutableStateOf(originalAgent?.avatarColorOrdinal ?: 3) }
+                val randomColorIndex = remember(originalAgent) { randomAvatarColorOrdinal() }
                 var avatarUriText by remember(originalAgent) { mutableStateOf(originalAgent?.avatarUri) }
                 val avatarPickerLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
                     if (uri != null) {
@@ -2397,12 +2372,12 @@ fun PersonaManagementScreen(viewModel: MainViewModel, onNavigateToTab: (String) 
                     ) {
                         EntityAvatar(
                             name = agentName.ifBlank { "Agent" },
-                            avatarColorOrdinal = colorIndexSelected,
+                            avatarColorOrdinal = randomColorIndex,
                             avatarUri = avatarUriText,
                             modifier = Modifier.size(56.dp)
                         )
-                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            OutlinedButton(onClick = { avatarPickerLauncher.launch(arrayOf("image/*")) }) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                            TextButton(onClick = { avatarPickerLauncher.launch(arrayOf("image/*")) }) {
                                 Icon(Icons.Default.Image, contentDescription = null, modifier = Modifier.size(16.dp))
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Text(if (avatarUriText.isNullOrBlank()) "上传头像" else "更换头像")
@@ -2549,33 +2524,6 @@ fun PersonaManagementScreen(viewModel: MainViewModel, onNavigateToTab: (String) 
 
                     Spacer(modifier = Modifier.height(12.dp))
 
-                    Text(
-                        "定制特征色彩 (Avatar Color):",
-                        style = MaterialTheme.typography.bodySmall,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(bottom = 6.dp)
-                    )
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        AvatarColors.forEachIndexed { index, color ->
-                            Box(
-                                modifier = Modifier
-                                    .size(32.dp)
-                                    .clip(CircleShape)
-                                    .background(color)
-                                    .clickable { colorIndexSelected = index }
-                                    .border(
-                                        width = if (colorIndexSelected == index) 3.dp else 0.dp,
-                                        color = if (colorIndexSelected == index) MaterialTheme.colorScheme.onBackground else Color.Transparent,
-                                        shape = CircleShape
-                                    )
-                            )
-                        }
-                    }
-
                     Spacer(modifier = Modifier.height(14.dp))
 
                     Row(
@@ -2605,7 +2553,7 @@ fun PersonaManagementScreen(viewModel: MainViewModel, onNavigateToTab: (String) 
                                                 soulMd = fSoul,
                                                 userMd = fUser,
                                                 toolsJson = computedToolsJson,
-                                                avatarColorOrdinal = colorIndexSelected,
+                                                avatarColorOrdinal = randomColorIndex,
                                                 avatarUri = avatarUriText
                                             )
                                         )
@@ -2620,7 +2568,7 @@ fun PersonaManagementScreen(viewModel: MainViewModel, onNavigateToTab: (String) 
                                                 soulMd = fSoul,
                                                 userMd = fUser,
                                                 toolsJson = computedToolsJson,
-                                                avatarColorOrdinal = colorIndexSelected,
+                                                avatarColorOrdinal = randomColorIndex,
                                                 avatarUri = avatarUriText
                                             )
                                         )
@@ -3111,6 +3059,7 @@ fun AgentConfigCard(
 fun SettingsScreen(viewModel: MainViewModel) {
     val settings by viewModel.settingsFlow.collectAsStateWithLifecycle(initialValue = null)
     val activeSettings = settings ?: return
+    val apiEndpointHistory by viewModel.apiEndpointHistoryFlow.collectAsStateWithLifecycle(initialValue = emptyList())
     val isTesting by viewModel.isTestingConnection.collectAsStateWithLifecycle()
     val modelsList by viewModel.modelsList.collectAsStateWithLifecycle()
     val testResultMessage by viewModel.testResultMessage.collectAsStateWithLifecycle()
@@ -3120,6 +3069,7 @@ fun SettingsScreen(viewModel: MainViewModel) {
     var editedUrl by remember { mutableStateOf(activeSettings.baseUrl) }
     var editedKey by remember { mutableStateOf(activeSettings.apiKey) }
     var isApiKeyMasked by remember { mutableStateOf(true) }
+    var isEndpointHistoryMenuExpanded by remember { mutableStateOf(false) }
     var draftTemperature by remember { mutableStateOf(activeSettings.temperature) }
     var draftTopP by remember { mutableStateOf(activeSettings.topP) }
     var draftMaxTokens by remember { mutableStateOf(activeSettings.maxTokens.coerceIn(1, 20000)) }
@@ -3167,16 +3117,56 @@ fun SettingsScreen(viewModel: MainViewModel) {
                     modifier = Modifier.padding(bottom = 12.dp)
                 )
 
-                OutlinedTextField(
-                    value = editedUrl,
-                    onValueChange = {
-                        editedUrl = it
-                    },
-                    label = { Text("API 端点 (Base URL)") },
-                    modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
-                    placeholder = { Text("https://api.openai.com/v1/") },
-                    singleLine = true
-                )
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 12.dp)
+                ) {
+                    OutlinedTextField(
+                        value = editedUrl,
+                        onValueChange = {
+                            editedUrl = it
+                        },
+                        label = { Text("API 端点 (Base URL)") },
+                        modifier = Modifier.fillMaxWidth(),
+                        placeholder = { Text("https://api.openai.com/v1/") },
+                        trailingIcon = {
+                            IconButton(
+                                onClick = { isEndpointHistoryMenuExpanded = !isEndpointHistoryMenuExpanded },
+                                enabled = apiEndpointHistory.isNotEmpty()
+                            ) {
+                                Icon(Icons.Default.History, contentDescription = "历史端点")
+                            }
+                        },
+                        singleLine = true
+                    )
+
+                    DropdownMenu(
+                        expanded = isEndpointHistoryMenuExpanded,
+                        onDismissRequest = { isEndpointHistoryMenuExpanded = false }
+                    ) {
+                        apiEndpointHistory.forEach { historyItem ->
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        text = historyItem.url,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                },
+                                onClick = {
+                                    editedUrl = historyItem.url
+                                    isEndpointHistoryMenuExpanded = false
+                                },
+                                trailingIcon = {
+                                    IconButton(onClick = { viewModel.deleteApiEndpointHistory(historyItem.url) }) {
+                                        Icon(Icons.Default.Delete, contentDescription = "删除历史端点")
+                                    }
+                                }
+                            )
+                        }
+                    }
+                }
 
                 OutlinedTextField(
                     value = editedKey,
@@ -3273,7 +3263,7 @@ fun SettingsScreen(viewModel: MainViewModel) {
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
                 Text(
-                    "对话核心超参数调谐",
+                    "对话核心超参数调节",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.primary,

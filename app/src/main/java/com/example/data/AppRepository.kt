@@ -7,6 +7,7 @@ import kotlinx.coroutines.flow.flowOf
 class AppRepository(context: Context) {
     private val database = AppDatabase.getDatabase(context)
     val settingsDao = database.settingsDao()
+    val apiEndpointHistoryDao = database.apiEndpointHistoryDao()
     val npcDao = database.npcDao()
     val agentDao = database.agentDao()
     val sessionDao = database.sessionDao()
@@ -15,6 +16,7 @@ class AppRepository(context: Context) {
     private val openAiService = OpenAiService()
 
     val settingsFlow: Flow<AppSettings?> = settingsDao.getSettingsFlow()
+    val apiEndpointHistoryFlow: Flow<List<ApiEndpointHistory>> = apiEndpointHistoryDao.getAllFlow()
     val allNpcsFlow: Flow<List<NpcCharacter>> = npcDao.getAllNpcsFlow()
     val allAgentsFlow: Flow<List<AgentConfig>> = agentDao.getAllAgentsFlow()
     val allSessionsFlow: Flow<List<ChatSession>> = sessionDao.getAllSessionsFlow()
@@ -32,6 +34,22 @@ class AppRepository(context: Context) {
 
     suspend fun updateSettings(settings: AppSettings) {
         settingsDao.saveSettings(settings)
+    }
+
+    suspend fun rememberApiEndpoint(url: String) {
+        val normalizedUrl = url.trim()
+        if (normalizedUrl.isNotBlank()) {
+            apiEndpointHistoryDao.upsertHistory(
+                ApiEndpointHistory(
+                    url = normalizedUrl,
+                    createdAt = System.currentTimeMillis()
+                )
+            )
+        }
+    }
+
+    suspend fun deleteApiEndpointHistory(url: String) {
+        apiEndpointHistoryDao.deleteByUrl(url)
     }
 
     // NPC methods
@@ -79,65 +97,63 @@ class AppRepository(context: Context) {
     }
 
     suspend fun insertMessage(message: ChatMessage): Long {
-        // Update session's last message text and timestamp
-        val session = sessionDao.getSessionById(message.sessionId)
-        if (session != null) {
-            val shortText = if (message.content.length > 60) {
-                message.content.take(60) + "..."
-            } else {
-                message.content
-            }
-            sessionDao.updateSession(
-                session.copy(
-                    lastMessage = shortText,
-                    updatedAt = message.timestamp
-                )
-            )
-        }
-        return messageDao.insertMessage(message)
+        val insertedId = messageDao.insertMessage(message)
+        refreshSessionPreview(message.sessionId, message.timestamp)
+        return insertedId
     }
 
     suspend fun deleteMessage(id: Long) {
+        val msg = messageDao.getMessageById(id)
         messageDao.deleteMessageById(id)
+        if (msg != null) {
+            refreshSessionPreview(msg.sessionId)
+        }
     }
 
     suspend fun updateMessage(message: ChatMessage) {
-        val session = sessionDao.getSessionById(message.sessionId)
-        if (session != null) {
-            val shortText = if (message.content.length > 60) {
-                message.content.take(60) + "..."
-            } else {
-                message.content
-            }
-            sessionDao.updateSession(
-                session.copy(
-                    lastMessage = shortText,
-                    updatedAt = message.timestamp
-                )
-            )
-        }
         messageDao.updateMessage(message)
+        refreshSessionPreview(message.sessionId, message.timestamp)
     }
 
     suspend fun deleteMessagesAfterId(sessionId: Long, messageId: Long) {
         messageDao.deleteMessagesAfterId(sessionId, messageId)
-        // Also update the session's last message
-        val remaining = messageDao.getMessagesForSession(sessionId)
-        val session = sessionDao.getSessionById(sessionId)
-        if (session != null) {
-            val lastMsg = remaining.lastOrNull()
-            val shortText = if (lastMsg != null) {
-                if (lastMsg.content.length > 60) lastMsg.content.take(60) + "..." else lastMsg.content
-            } else {
-                "No messages yet"
-            }
-            sessionDao.updateSession(
-                session.copy(
-                    lastMessage = shortText,
-                    updatedAt = lastMsg?.timestamp ?: System.currentTimeMillis()
-                )
+        refreshSessionPreview(sessionId)
+    }
+
+    private suspend fun refreshSessionPreview(sessionId: Long, updatedAtHint: Long? = null) {
+        val session = sessionDao.getSessionById(sessionId) ?: return
+        val messages = messageDao.getMessagesForSession(sessionId)
+
+        val latestAssistantBody = messages
+            .asReversed()
+            .asSequence()
+            .filter { it.role == "assistant" }
+            .map { sanitizeAssistantSummary(it.content) }
+            .firstOrNull { it.isNotBlank() }
+
+        val summary = latestAssistantBody?.let { shortenForSessionPreview(it) } ?: "No messages yet"
+        val updatedAt = updatedAtHint ?: messages.lastOrNull()?.timestamp ?: System.currentTimeMillis()
+
+        sessionDao.updateSession(
+            session.copy(
+                lastMessage = summary,
+                updatedAt = updatedAt
             )
-        }
+        )
+    }
+
+    private fun sanitizeAssistantSummary(content: String): String {
+        return content
+            .replace(Regex("""<tool_call\\b[^>]*>[\\s\\S]*?</tool_call>""", RegexOption.IGNORE_CASE), " ")
+            .replace(Regex("""<thinking>[\\s\\S]*?</thinking>""", RegexOption.IGNORE_CASE), " ")
+            .replace(Regex("""<think>[\\s\\S]*?</think>""", RegexOption.IGNORE_CASE), " ")
+            .replace(Regex("""</?think>""", RegexOption.IGNORE_CASE), " ")
+            .replace(Regex("""\s+"""), " ")
+            .trim()
+    }
+
+    private fun shortenForSessionPreview(content: String): String {
+        return if (content.length > 60) content.take(60) + "..." else content
     }
 
     // Models & LLM Services

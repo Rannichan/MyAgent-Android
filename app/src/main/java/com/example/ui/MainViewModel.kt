@@ -67,6 +67,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     // Reactive states
     val settingsFlow = repository.settingsFlow
+    val apiEndpointHistoryFlow = repository.apiEndpointHistoryFlow
     val allNpcsFlow = repository.allNpcsFlow
     val allAgentsFlow = repository.allAgentsFlow
     val allSessionsFlow = repository.allSessionsFlow
@@ -156,6 +157,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _isStreamingActive = MutableStateFlow(false)
     val isStreamingActive: StateFlow<Boolean> = _isStreamingActive.asStateFlow()
+
+    private val _streamingSessionId = MutableStateFlow<Long?>(null)
+    val streamingSessionId: StateFlow<Long?> = _streamingSessionId.asStateFlow()
 
     private val _currentStreamContent = MutableStateFlow("")
     val currentStreamContent: StateFlow<String> = _currentStreamContent.asStateFlow()
@@ -283,6 +287,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             val s = repository.getSettings()
             repository.updateSettings(s.copy(baseUrl = url))
+            repository.rememberApiEndpoint(url)
         }
     }
 
@@ -297,6 +302,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             val s = repository.getSettings()
             repository.updateSettings(s.copy(baseUrl = url, apiKey = key))
+            repository.rememberApiEndpoint(url)
+        }
+    }
+
+    fun deleteApiEndpointHistory(url: String) {
+        viewModelScope.launch {
+            repository.deleteApiEndpointHistory(url)
         }
     }
 
@@ -552,6 +564,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         activeStreamingJob = null
 
         _isStreamingActive.value = false
+        _streamingSessionId.value = null
         _currentStreamContent.value = ""
         _currentStreamThinking.value = ""
 
@@ -620,6 +633,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         activeStreamingJob?.cancel()
         activeStreamingJob = viewModelScope.launch {
             _isStreamingActive.value = true
+            _streamingSessionId.value = sessionId
             _currentStreamContent.value = ""
             _currentStreamThinking.value = ""
             _latencyMs.value = 0L
@@ -776,6 +790,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
 
             _isStreamingActive.value = false
+            _streamingSessionId.value = null
             _currentStreamContent.value = ""
             _currentStreamThinking.value = ""
             currentRawRequestBody = null
