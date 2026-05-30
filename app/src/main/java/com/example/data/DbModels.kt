@@ -17,6 +17,8 @@ data class AppSettings(
     val isStreaming: Boolean = true,
     val isThinkingModeEnabled: Boolean = true,
     val isToolCallsEnabled: Boolean = false,
+    val isPortForwardEnabled: Boolean = false,
+    val portForwardPort: Int = 8787,
     val statsResetTime: Long = 0L
 )
 

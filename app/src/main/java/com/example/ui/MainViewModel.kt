@@ -1,6 +1,7 @@
 package com.example.ui
 
 import android.app.Application
+import android.content.Context
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -64,6 +65,11 @@ data class CareerStats(
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val repository = AppRepository(application)
+    private companion object {
+        const val FIXED_PORT_FORWARD_PORT = 8787
+    }
+    private var appliedPortForwardEnabled: Boolean? = null
+    private var appliedPortForwardPort: Int? = null
 
     // Reactive states
     val settingsFlow = repository.settingsFlow
@@ -193,6 +199,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _isApiConnected = MutableStateFlow(false)
     val isApiConnected: StateFlow<Boolean> = _isApiConnected.asStateFlow()
 
+    private val _isPortForwardRunning = MutableStateFlow(false)
+    val isPortForwardRunning: StateFlow<Boolean> = _isPortForwardRunning.asStateFlow()
+
+    private val _portForwardListeningPort = MutableStateFlow<Int?>(null)
+    val portForwardListeningPort: StateFlow<Int?> = _portForwardListeningPort.asStateFlow()
+
+    private val _portForwardStatus = MutableStateFlow("端口转发未启动")
+    val portForwardStatus: StateFlow<String> = _portForwardStatus.asStateFlow()
+
     private var activeStreamingJob: Job? = null
     private var currentRawRequestBody: String? = null
     private val currentRawResponseBody = StringBuilder()
@@ -203,6 +218,26 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             repository.getSettings()
             preloadDefaultNpcsAndAgents()
             fetchAvailableModels()
+        }
+
+        viewModelScope.launch {
+            repository.settingsFlow.collect { settings ->
+                settings ?: return@collect
+                syncPortForwardService(
+                    enabled = settings.isPortForwardEnabled,
+                    port = FIXED_PORT_FORWARD_PORT
+                )
+            }
+        }
+
+        viewModelScope.launch {
+            PortForwardForegroundService.stateFlow.collect { state ->
+                _isPortForwardRunning.value = state.isRunning
+                _portForwardListeningPort.value = state.port
+                _portForwardStatus.value = state.message
+                appliedPortForwardEnabled = state.isRunning
+                appliedPortForwardPort = state.port
+            }
         }
 
         // Keep active message list updated
@@ -303,6 +338,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val s = repository.getSettings()
             repository.updateSettings(s.copy(baseUrl = url, apiKey = key))
             repository.rememberApiEndpoint(url)
+        }
+    }
+
+    fun updatePortForwardConfig(enabled: Boolean, port: Int) {
+        viewModelScope.launch {
+            val s = repository.getSettings()
+            repository.updateSettings(
+                s.copy(
+                    isPortForwardEnabled = enabled,
+                    portForwardPort = FIXED_PORT_FORWARD_PORT
+                )
+            )
+
+            syncPortForwardService(enabled = enabled, port = FIXED_PORT_FORWARD_PORT)
         }
     }
 
@@ -852,5 +901,31 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         return promptSystemMessages + historyMessages
+    }
+
+    private fun syncPortForwardService(enabled: Boolean, port: Int) {
+        if (!enabled) {
+            if (appliedPortForwardEnabled == false && !PortForwardForegroundService.stateFlow.value.isRunning) {
+                return
+            }
+
+            appliedPortForwardEnabled = false
+            appliedPortForwardPort = null
+            PortForwardForegroundService.stop(getApplication<Application>())
+            return
+        }
+
+        val fixedPort = FIXED_PORT_FORWARD_PORT
+        if (appliedPortForwardEnabled == true && appliedPortForwardPort == fixedPort && PortForwardForegroundService.stateFlow.value.isRunning) {
+            return
+        }
+
+        appliedPortForwardEnabled = true
+        appliedPortForwardPort = fixedPort
+        PortForwardForegroundService.start(getApplication<Application>(), fixedPort)
+    }
+
+    override fun onCleared() {
+        super.onCleared()
     }
 }

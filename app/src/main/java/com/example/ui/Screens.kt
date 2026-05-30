@@ -66,6 +66,8 @@ import coil.compose.AsyncImage
 import com.example.data.*
 import kotlinx.coroutines.flow.sample
 import kotlinx.coroutines.launch
+import java.net.Inet4Address
+import java.net.NetworkInterface
 
 // Color index mapper for dynamic avatars
 val AvatarColors = listOf(
@@ -87,6 +89,26 @@ private data class AvatarUiModel(
 
 private fun avatarInitial(name: String): String {
     return name.trim().takeIf { it.isNotEmpty() }?.take(1)?.uppercase() ?: "?"
+}
+
+private fun resolveLanIpv4Address(): String? {
+    return runCatching {
+        val interfaces = NetworkInterface.getNetworkInterfaces() ?: return null
+        while (interfaces.hasMoreElements()) {
+            val network = interfaces.nextElement()
+            if (!network.isUp || network.isLoopback) continue
+
+            val addresses = network.inetAddresses
+            while (addresses.hasMoreElements()) {
+                val addr = addresses.nextElement()
+                if (addr is Inet4Address && !addr.isLoopbackAddress) {
+                    val host = addr.hostAddress
+                    if (!host.isNullOrBlank()) return host
+                }
+            }
+        }
+        null
+    }.getOrNull()
 }
 
 @Composable
@@ -3057,10 +3079,14 @@ fun AgentConfigCard(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(viewModel: MainViewModel) {
+    val clipboardManager = LocalClipboardManager.current
     val settings by viewModel.settingsFlow.collectAsStateWithLifecycle(initialValue = null)
     val activeSettings = settings ?: return
     val apiEndpointHistory by viewModel.apiEndpointHistoryFlow.collectAsStateWithLifecycle(initialValue = emptyList())
     val isTesting by viewModel.isTestingConnection.collectAsStateWithLifecycle()
+    val isPortForwardRunning by viewModel.isPortForwardRunning.collectAsStateWithLifecycle()
+    val portForwardListeningPort by viewModel.portForwardListeningPort.collectAsStateWithLifecycle()
+    val portForwardStatus by viewModel.portForwardStatus.collectAsStateWithLifecycle()
     val modelsList by viewModel.modelsList.collectAsStateWithLifecycle()
     val testResultMessage by viewModel.testResultMessage.collectAsStateWithLifecycle()
     val careerStats by viewModel.careerStatsFlow.collectAsStateWithLifecycle()
@@ -3070,6 +3096,7 @@ fun SettingsScreen(viewModel: MainViewModel) {
     var editedKey by remember { mutableStateOf(activeSettings.apiKey) }
     var isApiKeyMasked by remember { mutableStateOf(true) }
     var isEndpointHistoryMenuExpanded by remember { mutableStateOf(false) }
+    var draftPortForwardEnabled by remember { mutableStateOf(activeSettings.isPortForwardEnabled) }
     var draftTemperature by remember { mutableStateOf(activeSettings.temperature) }
     var draftTopP by remember { mutableStateOf(activeSettings.topP) }
     var draftMaxTokens by remember { mutableStateOf(activeSettings.maxTokens.coerceIn(1, 20000)) }
@@ -3077,6 +3104,10 @@ fun SettingsScreen(viewModel: MainViewModel) {
     LaunchedEffect(activeSettings.baseUrl, activeSettings.apiKey) {
         editedUrl = activeSettings.baseUrl
         editedKey = activeSettings.apiKey
+    }
+
+    LaunchedEffect(activeSettings.isPortForwardEnabled, activeSettings.portForwardPort) {
+        draftPortForwardEnabled = activeSettings.isPortForwardEnabled
     }
 
     LaunchedEffect(activeSettings.temperature, activeSettings.topP, activeSettings.maxTokens) {
@@ -3249,6 +3280,91 @@ fun SettingsScreen(viewModel: MainViewModel) {
                         modifier = Modifier.padding(top = 10.dp)
                     )
                 }
+            }
+        }
+
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 16.dp),
+            shape = RoundedCornerShape(16.dp),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.12f)),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+        ) {
+            var deviceLanIp by remember { mutableStateOf(resolveLanIpv4Address()) }
+            val accessPort = portForwardListeningPort ?: activeSettings.portForwardPort
+            val accessUrl = deviceLanIp?.let { "http://$it:$accessPort/" }
+
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text(
+                    "局域网端口转发",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(bottom = 10.dp)
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("启用端口暴露并转发", style = MaterialTheme.typography.bodyMedium)
+                    Switch(
+                        checked = draftPortForwardEnabled,
+                        onCheckedChange = {
+                            draftPortForwardEnabled = it
+                            viewModel.updatePortForwardConfig(it, accessPort)
+                        }
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.Start,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "访问地址: ${accessUrl ?: "未获取到"}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    TextButton(onClick = { deviceLanIp = resolveLanIpv4Address() }) {
+                        Text("刷新地址")
+                    }
+                    TextButton(
+                        onClick = {
+                            accessUrl?.let { clipboardManager.setText(AnnotatedString(it)) }
+                        },
+                        enabled = accessUrl != null
+                    ) {
+                        Text("复制地址")
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                val statusColor = if (isPortForwardRunning) Color(0xFF2E7D32) else MaterialTheme.colorScheme.onSurfaceVariant
+                Text(
+                    text = portForwardStatus,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = statusColor
+                )
+                Text(
+                    text = "请求将转发至: ${activeSettings.baseUrl.trimEnd('/')}/chat/completions",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 4.dp)
+                )
             }
         }
 
